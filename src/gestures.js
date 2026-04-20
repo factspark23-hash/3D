@@ -15,6 +15,7 @@
     const GESTURE_COOLDOWN = 800;
     let currentLandmarks = null;
     let mediaPipeLoaded = false;
+    let activeMode = null; // 'mediapipe' or 'basic'
 
     // ─── Load MediaPipe scripts dynamically ───
     function loadScript(src) {
@@ -106,6 +107,7 @@
 
         // Step 5: Start detection loop (manual, no Camera utility dependency)
         isRunning = true;
+        activeMode = 'mediapipe';
         canvasElement.width = videoElement.videoWidth || 640;
         canvasElement.height = videoElement.videoHeight || 480;
 
@@ -376,6 +378,7 @@
                 canvas.width = 320;
                 canvas.height = 240;
                 isRunning = true;
+                activeMode = 'basic';
 
                 let prevFrame = null;
                 let motionHistory = [];
@@ -466,5 +469,6 @@
         recognizeGesture,
         getLandmarks,
         isRunning: () => isRunning,
+        getMode: () => activeMode,
     };
 })();

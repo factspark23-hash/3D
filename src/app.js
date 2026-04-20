@@ -78,6 +78,48 @@
     };
 
     // ═══════════════════════════════════════════════════════════
+    // HOLOGRAPHIC CONFIRM DIALOG
+    // ═══════════════════════════════════════════════════════════
+    function holoConfirm(message) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;';
+
+            const box = document.createElement('div');
+            box.style.cssText = 'background:rgba(0,10,20,0.95);border:1px solid rgba(0,212,255,0.5);box-shadow:0 0 40px rgba(0,212,255,0.2);padding:30px;max-width:400px;width:90%;text-align:center;';
+
+            const msg = document.createElement('p');
+            msg.style.cssText = "font-family:'Rajdhani',sans-serif;font-size:15px;color:#e0e0e0;margin-bottom:24px;line-height:1.6;";
+            msg.textContent = message;
+
+            const btnRow = document.createElement('div');
+            btnRow.style.cssText = 'display:flex;gap:12px;justify-content:center;';
+
+            const makeBtn = (label, color, border, hoverBg) => {
+                const btn = document.createElement('button');
+                btn.textContent = label;
+                btn.style.cssText = `background:${color};border:1px solid ${border};color:${label === 'CANCEL' ? '#888' : border};padding:10px 28px;font-family:'Orbitron',monospace;font-size:11px;letter-spacing:2px;cursor:pointer;transition:all 0.3s;`;
+                btn.addEventListener('mouseenter', () => { btn.style.background = hoverBg; });
+                btn.addEventListener('mouseleave', () => { btn.style.background = color; });
+                return btn;
+            };
+
+            const cancelBtn = makeBtn('CANCEL', 'transparent', 'rgba(0,212,255,0.3)', 'rgba(0,212,255,0.1)');
+            const confirmBtn = makeBtn('DELETE', 'rgba(255,50,50,0.1)', '#ff3232', 'rgba(255,50,50,0.25)');
+
+            cancelBtn.addEventListener('click', () => { overlay.remove(); resolve(false); });
+            confirmBtn.addEventListener('click', () => { overlay.remove(); resolve(true); });
+
+            btnRow.appendChild(cancelBtn);
+            btnRow.appendChild(confirmBtn);
+            box.appendChild(msg);
+            box.appendChild(btnRow);
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // ACTION LOGGER + CONFUSION DETECTION
     // ═══════════════════════════════════════════════════════════
     function logAction(type, detail) {
@@ -398,9 +440,9 @@
             bar.style.width = '10%';
 
             try {
-                await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+                await faceapi.nets.tinyFaceDetector.loadFromUri('./models');
                 bar.style.width = '25%';
-                await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+                await faceapi.nets.faceLandmark68Net.loadFromUri('./models');
                 bar.style.width = '40%';
             } catch (modelErr) {
                 console.error('Model load failed:', modelErr);
@@ -711,7 +753,8 @@
                 const deleteBtn = card.querySelector('.card-delete');
                 deleteBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    if (confirm(`Delete "${proj.name}"? This cannot be undone.`)) {
+                    const confirmed = await holoConfirm(`Delete "${proj.name}"? This cannot be undone.`);
+                    if (confirmed) {
                         await db.del('projects', proj.id);
                         state.projects = state.projects.filter(p => p.id !== proj.id);
                         window._jarvisProjects = state.projects;
@@ -1255,10 +1298,7 @@
 
     function handleExploderGesture(gestureType, landmarks) {
         // Only active when exploder is visible
-        if (state.currentSection !== 'home' || !exploderModel || !document.getElementById('exploder-view').classList.contains('hidden') === false) {
-            // Check if exploder is visible
-            if (document.getElementById('exploder-view').classList.contains('hidden')) return;
-        }
+        if (!exploderModel || document.getElementById('exploder-view').classList.contains('hidden')) return;
 
         const now = Date.now();
         const canvas = document.getElementById('part-detail-canvas');
@@ -1430,16 +1470,38 @@
             state.peer.on('open', () => {
                 console.log('[Room] Peer open:', state.roomCode);
                 showActiveRoom();
-                addRoomMessage('system', `Room created: ${state.roomCode}`);
+                addRoomMessage('system', `Room created: ${state.roomCode} — waiting for peer...`);
             });
 
             state.peer.on('connection', conn => {
-                state.peerConn = conn;
-                setupDataChannel(conn);
-                addRoomMessage('system', 'Peer connected!');
+                let authenticated = false;
+
+                conn.on('open', () => {
+                    addRoomMessage('system', 'Incoming connection — waiting for password...');
+                });
+
+                conn.on('data', data => {
+                    if (data.type === 'auth' && !authenticated) {
+                        if (data.password === state.roomPassword) {
+                            authenticated = true;
+                            conn.send({ type: 'auth_ok' });
+                            state.peerConn = conn;
+                            addRoomMessage('system', 'Peer authenticated and connected!');
+                            setupDataChannel(conn);
+                        } else {
+                            conn.send({ type: 'auth_fail' });
+                            addRoomMessage('system', 'Wrong password — connection rejected');
+                            setTimeout(() => conn.close(), 500);
+                        }
+                    } else if (authenticated && data.type === 'chat') {
+                        addRoomMessage('remote', data.text);
+                    }
+                });
             });
 
             state.peer.on('call', async call => {
+                // Only answer if we have an authenticated peer
+                if (!state.peerConn) { call.close(); return; }
                 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 document.getElementById('local-video').srcObject = stream;
                 call.answer(stream);
@@ -1458,7 +1520,6 @@
         if (!code || !password) { alert('Enter room code and password'); return; }
 
         state.roomCode = code;
-        state.roomPassword = password;
 
         try {
             state.peer = new Peer();
@@ -1466,19 +1527,46 @@
                 console.log('[Room] Joining:', code);
                 const conn = state.peer.connect('jarvis-' + code.toLowerCase());
                 state.peerConn = conn;
-                setupDataChannel(conn);
+                let authPending = true;
 
-                conn.on('open', async () => {
-                    showActiveRoom();
-                    addRoomMessage('system', `Joined room: ${code}`);
+                conn.on('open', () => {
+                    addRoomMessage('system', 'Connected — sending password...');
+                    conn.send({ type: 'auth', password: password });
+                });
 
-                    // Start video call
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                    document.getElementById('local-video').srcObject = stream;
-                    const call = state.peer.call('jarvis-' + code.toLowerCase(), stream);
-                    call.on('stream', remoteStream => {
-                        document.getElementById('remote-video').srcObject = remoteStream;
-                    });
+                conn.on('data', data => {
+                    if (data.type === 'auth_ok' && authPending) {
+                        authPending = false;
+                        showActiveRoom();
+                        addRoomMessage('system', `Joined room: ${code}`);
+                        setupDataChannel(conn);
+
+                        // Start video call after auth
+                        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
+                            document.getElementById('local-video').srcObject = stream;
+                            const call = state.peer.call('jarvis-' + code.toLowerCase(), stream);
+                            call.on('stream', remoteStream => {
+                                document.getElementById('remote-video').srcObject = remoteStream;
+                            });
+                        }).catch(() => {
+                            addRoomMessage('system', 'Camera/mic not available — chat only');
+                        });
+                    } else if (data.type === 'auth_fail' && authPending) {
+                        authPending = false;
+                        addRoomMessage('system', 'Wrong password — connection rejected');
+                        setTimeout(() => {
+                            leaveRoom();
+                        }, 1000);
+                    } else if (data.type === 'chat') {
+                        addRoomMessage('remote', data.text);
+                    }
+                });
+
+                conn.on('close', () => {
+                    if (authPending) {
+                        authPending = false;
+                        addRoomMessage('system', 'Connection closed — check room code');
+                    }
                 });
             });
         } catch (err) {
@@ -1582,7 +1670,16 @@
             document.getElementById('gesture-start').style.display = 'none';
             canvas.width = video.videoWidth || 640;
             canvas.height = video.videoHeight || 480;
-            status.textContent = 'Hand tracking active — show a gesture';
+
+            const mode = JarvisGestures.getMode();
+            if (mode === 'basic') {
+                status.textContent = 'Basic mode — swipe gestures only (MediaPipe unavailable)';
+                document.getElementById('gesture-add').disabled = true;
+                document.getElementById('gesture-add').title = 'Custom gestures require MediaPipe (full hand tracking)';
+                document.getElementById('gesture-add').style.opacity = '0.4';
+            } else {
+                status.textContent = 'Hand tracking active — show a gesture';
+            }
         } catch (err) {
             console.error('Gesture init error:', err);
             status.textContent = 'Camera denied or model failed to load';
@@ -1674,6 +1771,10 @@
         if (!name) { alert('Enter gesture name'); return; }
         if (!JarvisGestures.isRunning()) {
             alert('Enable camera first before recording gestures');
+            return;
+        }
+        if (JarvisGestures.getMode() === 'basic') {
+            alert('Custom gesture recording requires MediaPipe hand tracking. Current mode only supports basic swipe detection.');
             return;
         }
 

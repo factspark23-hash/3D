@@ -358,7 +358,7 @@
     // ─── DRONE ───
     quickProject('proj-drone', 'Quad Drone', '🛸', [
         ['frame','Main Frame','CF X-frame. 450mm.','Structure','frame',[0,0,0],[0,0,0],0x333333,[
-            ['bottom','Bottom Plate','Battery mount.',()=>box(0.8,0.02,0.8),[0,-0.04,0],[0,0,0],0x1a1a1a],
+            ['bottom','Bottom Plate','Battery mount.','Structure',()=>box(0.8,0.02,0.8),[0,-0.04,0],[0,0,0],0x1a1a1a],
         ]],
         ['top-plate','Top Plate','FC + GPS mount.','Structure','top-plate',[0,0.05,0],[0,0,0],0x444444,[]],
         ['arm-fl','FL Arm','CCW motor.','Arms','arm-fl',[0,0,0],[0,0,0],0x00ff88,[]],

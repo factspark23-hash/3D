@@ -42,6 +42,7 @@
             <button class="nav-item" data-section="room"><span class="nav-icon">🚪</span><span class="nav-label">ROOM</span></button>
             <button class="nav-item" data-section="gesture"><span class="nav-icon">🤌</span><span class="nav-label">GESTURE</span></button>
             <button class="nav-item" data-section="upload"><span class="nav-icon">📤</span><span class="nav-label">UPLOAD</span></button>
+            <button class="nav-item" data-section="favorites"><span class="nav-icon">⭐</span><span class="nav-label">FAVORITES</span></button>
         </div>
 
         <!-- ─── Home: Project Grid (3×3) ─── -->
@@ -65,6 +66,16 @@
                         <button id="btn-explode" class="exploder-ctrl-btn" title="Explode/Assemble">💥 Explode</button>
                         <button id="btn-reset-view" class="exploder-ctrl-btn" title="Reset View">🔄 Reset</button>
                         <button id="btn-xray" class="exploder-ctrl-btn" title="X-Ray Mode">👁️ X-Ray</button>
+                        <button id="btn-measure" class="exploder-ctrl-btn" title="Measure Mode">📏 Measure</button>
+                        <button id="btn-stress" class="exploder-ctrl-btn" title="Stress Test">🧪 Stress</button>
+                        <button id="btn-favorite" class="exploder-ctrl-btn" title="Favorite Part">☆ Fav</button>
+                        <button id="btn-save-view" class="exploder-ctrl-btn" title="Save View">💾 Save</button>
+                        <button id="btn-screenshot-view" class="exploder-ctrl-btn" title="Screenshot">📸</button>
+                    </div>
+                    <div id="assembly-timeline" class="assembly-timeline hidden">
+                        <span class="timeline-label">EXPLODED</span>
+                        <input type="range" id="explode-slider" min="0" max="100" value="0" class="explode-slider">
+                        <span class="timeline-label">ASSEMBLED</span>
                     </div>
                     <div id="exploder-hint" class="exploder-hint">🖱️ Click any part to explore · Drag to rotate</div>
                     <div id="part-detail-info">
@@ -239,9 +250,60 @@
 
         <!-- Search + Sound Controls -->
         <div id="quick-controls">
+            <button id="screenshot-btn" title="Screenshot (P)">📸</button>
             <button id="search-btn" title="Search (Ctrl+K or /)">🔍</button>
+            <button id="saved-views-btn" title="Saved Views">💾</button>
+            <button id="voice-btn" title="Voice Commands">🎙️</button>
             <button id="sound-btn" title="Toggle Sound (M)">🔊</button>
         </div>
+
+        <!-- ─── Saved Views Panel ─── -->
+        <div id="saved-views-panel" class="saved-views-panel hidden">
+            <div class="sv-header">
+                <span>SAVED VIEWS</span>
+                <button id="sv-close" class="close-btn">✕</button>
+            </div>
+            <div id="sv-list" class="sv-list"></div>
+            <div id="sv-empty" class="sv-empty">No saved views yet. Click 💾 in exploder to save.</div>
+        </div>
+
+        <!-- ─── Favorites Section ─── -->
+        <div id="favorites-section" class="section-view hidden">
+            <div class="section-title">⭐ FAVORITES</div>
+            <div id="favorites-list" class="favorites-list"></div>
+            <div id="favorites-empty" class="sv-empty">No favorites yet. Click ☆ Fav on any part to add.</div>
+        </div>
+
+        <!-- ─── Guided Tour Overlay ─── -->
+        <div id="tour-overlay" class="tour-overlay hidden">
+            <div class="tour-spotlight" id="tour-spotlight"></div>
+            <div class="tour-tooltip" id="tour-tooltip">
+                <div class="tour-step-indicator" id="tour-step-ind"></div>
+                <p id="tour-text"></p>
+                <div class="tour-actions">
+                    <button id="tour-skip" class="btn-secondary">SKIP</button>
+                    <button id="tour-next" class="btn-primary">NEXT</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── Achievement Toast ─── -->
+        <div id="achievement-toast" class="achievement-toast hidden">
+            <span class="achievement-icon">🏆</span>
+            <div class="achievement-text">
+                <span class="achievement-title" id="achievement-title"></span>
+                <span class="achievement-desc" id="achievement-desc"></span>
+            </div>
+        </div>
+
+        <!-- ─── Voice Status ─── -->
+        <div id="voice-status" class="voice-status hidden">
+            <span class="voice-dot"></span>
+            <span id="voice-text">Listening...</span>
+        </div>
+
+        <!-- Screenshot flash effect -->
+        <div id="screenshot-flash"></div>
 
         <!-- ─── Status HUD ─── -->
         <div id="status-hud">

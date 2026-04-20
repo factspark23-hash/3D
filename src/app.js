@@ -33,13 +33,15 @@
     // INDEXEDDB
     // ═══════════════════════════════════════════════════════════
     const db = {
-        name: 'jarvis3d', version: 2, _db: null,
+        name: 'jarvis3d', version: 3, _db: null,
         async open() {
             return new Promise((resolve, reject) => {
                 const req = indexedDB.open(this.name, this.version);
                 req.onupgradeneeded = (e) => {
                     const d = e.target.result;
-                    ['faces', 'projects', 'gestures', 'navPositions', 'settings', 'annotations'].forEach(s => {
+                    const stores = ['faces', 'projects', 'gestures', 'navPositions', 'settings', 'annotations',
+                                    'savedViews', 'favorites', 'achievements'];
+                    stores.forEach(s => {
                         if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' });
                     });
                 };
@@ -631,6 +633,16 @@
         initGestureSection();
         initUploadSection();
         initAIChat();
+        initScreenshot();
+        initSavedViews();
+        initFavorites();
+        initGuidedTour();
+        initAssemblyTimeline();
+        initMobileGestures();
+        initAchievements();
+        initVoiceCommands();
+        initStressTest();
+        initPluginSystem();
 
         // Initialize sounds on first user interaction
         document.addEventListener('click', () => {
@@ -719,6 +731,11 @@
             // Stop card animations when leaving home
             stopAllCardAnimations();
         }
+
+        // Hooks: timeline, favorites, achievements, plugins
+        if (name !== 'home') hideTimeline();
+        if (name === 'favorites') renderFavorites();
+        fireHook('sectionChanged', name);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1017,6 +1034,7 @@
         if (data.hasChildren) {
             exploderBreadcrumb.push({ mesh: mesh, id: data.partId, name: data.partName, desc: data.partDesc });
             drillIntoPartById(data.partId);
+            if (exploderBreadcrumb.length >= 5) checkAchievement('deep_diver', 'Deep Diver', 'Drilled 5 levels deep into a part');
         } else {
             exploderSelected = mesh;
             highlightMesh(mesh, true);
@@ -1212,6 +1230,13 @@
         initExploderRenderer();
         rebuildExploderModel(proj);
         updateBreadcrumbDisplay();
+
+        // Hooks: timeline + achievements
+        showTimeline();
+        viewedProjects.add(proj.id);
+        checkAchievement('first_view', 'First Steps', 'Opened your first project');
+        if (viewedProjects.size >= 9) checkAchievement('explorer', 'Explorer', 'Viewed all 9 built-in projects');
+        fireHook('projectOpened', proj);
     }
 
     function showPartInfo(data) {
@@ -1221,6 +1246,13 @@
         const oldAnn = detailInfo.querySelector('.annotation-wrapper');
         if (oldAnn) oldAnn.remove();
         JarvisSearch.createAnnotationUI(data.partId, detailInfo);
+
+        // Hooks: favorites + achievements
+        state.selectedPart = data;
+        updateFavoriteButton();
+        viewedParts.add(data.partId || data.partName);
+        if (viewedParts.size >= 90) checkAchievement('all_parts', 'Completionist', 'Inspected 90 unique parts');
+        fireHook('partSelected', data);
     }
 
     function renderSidePanel(focusPartId) {
@@ -1578,8 +1610,12 @@
         conn.on('data', data => {
             if (data.type === 'chat') {
                 addRoomMessage('remote', data.text);
+            } else if (data.type === '3d_state') {
+                handleRemote3DState(data);
             }
         });
+        // Start 3D state sync when peer connects
+        startStateSync();
     }
 
     function showActiveRoom() {
@@ -1590,6 +1626,7 @@
     }
 
     function leaveRoom() {
+        stopStateSync();
         if (state.peerConn) state.peerConn.close();
         if (state.peer) state.peer.destroy();
         state.peer = null; state.peerConn = null; state.roomCode = null;
@@ -2055,6 +2092,7 @@
         state.projects.push(proj);
         renderProjectGrid();
         showSection('home');
+        checkAchievement('first_upload', 'Creator', 'Uploaded your first 3D model');
 
         // Reset upload view
         document.getElementById('upload-preview').classList.add('hidden');
@@ -2172,6 +2210,708 @@
         } catch (err) {
             addAIMessage('assistant', `Connection Error: ${err.message}. Make sure server.js is running.`);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 1. SAVED VIEWS
+    // ═══════════════════════════════════════════════════════════
+    function initSavedViews() {
+        document.getElementById('saved-views-btn').addEventListener('click', toggleSavedViewsPanel);
+        document.getElementById('sv-close').addEventListener('click', () => {
+            document.getElementById('saved-views-panel').classList.add('hidden');
+        });
+        document.getElementById('btn-save-view').addEventListener('click', saveCurrentView);
+    }
+
+    function toggleSavedViewsPanel() {
+        const panel = document.getElementById('saved-views-panel');
+        panel.classList.toggle('hidden');
+        if (!panel.classList.contains('hidden')) renderSavedViews();
+    }
+
+    async function saveCurrentView() {
+        if (!state.selectedProject) return;
+        const name = prompt('Name this view:', `${state.selectedProject.name} View`);
+        if (!name) return;
+
+        const view = {
+            id: 'sv-' + Date.now(),
+            name,
+            projectId: state.selectedProject.id,
+            projectName: state.selectedProject.name,
+            partName: state.selectedPart?.name || null,
+            partId: state.selectedPart?.partId || null,
+            rotation: { ...exploderRotation },
+            exploded: exploderExploded,
+            xray: document.getElementById('btn-xray').classList.contains('active'),
+            cameraPos: exploderCamera ? { x: exploderCamera.position.x, y: exploderCamera.position.y, z: exploderCamera.position.z } : null,
+            created: Date.now(),
+        };
+
+        await db.put('savedViews', view);
+        JarvisSounds.success();
+        document.getElementById('btn-save-view').textContent = '✅ Saved';
+        setTimeout(() => { document.getElementById('btn-save-view').textContent = '💾 Save'; }, 1500);
+    }
+
+    async function renderSavedViews() {
+        const views = await db.getAll('savedViews');
+        const list = document.getElementById('sv-list');
+        const empty = document.getElementById('sv-empty');
+        list.innerHTML = '';
+
+        if (!views.length) { empty.style.display = 'block'; return; }
+        empty.style.display = 'none';
+
+        views.sort((a, b) => b.created - a.created).forEach(v => {
+            const item = document.createElement('div');
+            item.className = 'sv-item';
+            item.innerHTML = `
+                <div>
+                    <div class="sv-item-name">${v.name}</div>
+                    <div class="sv-item-project">${v.projectName}${v.partName ? ' → ' + v.partName : ''}</div>
+                </div>
+                <button class="sv-item-delete" data-id="${v.id}">✕</button>
+            `;
+            item.addEventListener('click', (e) => {
+                if (e.target.closest('.sv-item-delete')) return;
+                loadSavedView(v);
+            });
+            item.querySelector('.sv-item-delete').addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await db.del('savedViews', v.id);
+                renderSavedViews();
+            });
+            list.appendChild(item);
+        });
+    }
+
+    function loadSavedView(view) {
+        const proj = state.projects.find(p => p.id === view.projectId);
+        if (!proj) return;
+        document.getElementById('saved-views-panel').classList.add('hidden');
+        openExploder(proj);
+        setTimeout(() => {
+            if (view.rotation) { exploderRotation = { ...view.rotation }; exploderRotTarget = { ...view.rotation }; }
+            if (view.cameraPos && exploderCamera) exploderCamera.position.set(view.cameraPos.x, view.cameraPos.y, view.cameraPos.z);
+            if (view.exploded !== undefined && view.exploded !== exploderExploded) {
+                exploderExploded = view.exploded;
+                document.getElementById('btn-explode').textContent = exploderExploded ? '🔧 Assemble' : '💥 Explode';
+            }
+            if (view.partName) {
+                const mesh = exploderFlatParts.find(m => m.userData.partName === view.partName);
+                if (mesh) handlePartClick(mesh);
+            }
+        }, 500);
+        JarvisSounds.navigate();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 2. FAVORITES
+    // ═══════════════════════════════════════════════════════════
+    function initFavorites() {
+        document.getElementById('btn-favorite').addEventListener('click', toggleFavorite);
+    }
+
+    async function toggleFavorite() {
+        if (!state.selectedProject || !state.selectedPart) return;
+        const favId = `${state.selectedProject.id}::${state.selectedPart.partId || state.selectedPart.name}`;
+        const existing = await db.get('favorites', favId);
+
+        if (existing) {
+            await db.del('favorites', favId);
+            document.getElementById('btn-favorite').textContent = '☆ Fav';
+            document.getElementById('btn-favorite').classList.remove('is-favorited');
+        } else {
+            await db.put('favorites', {
+                id: favId,
+                projectId: state.selectedProject.id,
+                projectName: state.selectedProject.name,
+                projectIcon: state.selectedProject.icon,
+                partId: state.selectedPart.partId,
+                partName: state.selectedPart.name,
+                partDesc: state.selectedPart.desc || '',
+                created: Date.now(),
+            });
+            document.getElementById('btn-favorite').textContent = '★ Fav';
+            document.getElementById('btn-favorite').classList.add('is-favorited');
+            checkAchievement('first_favorite', 'First Favorite', 'Favorited your first part');
+            const favCount = (await db.getAll('favorites')).length;
+            if (favCount >= 10) checkAchievement('collector', 'Collector', 'Favorited 10 parts');
+        }
+        JarvisSounds.click();
+    }
+
+    async function updateFavoriteButton() {
+        if (!state.selectedProject || !state.selectedPart) return;
+        const favId = `${state.selectedProject.id}::${state.selectedPart.partId || state.selectedPart.name}`;
+        const existing = await db.get('favorites', favId);
+        document.getElementById('btn-favorite').textContent = existing ? '★ Fav' : '☆ Fav';
+        document.getElementById('btn-favorite').classList.toggle('is-favorited', !!existing);
+    }
+
+    async function renderFavorites() {
+        const favs = await db.getAll('favorites');
+        const list = document.getElementById('favorites-list');
+        const empty = document.getElementById('favorites-empty');
+        list.innerHTML = '';
+
+        if (!favs.length) { empty.style.display = 'block'; return; }
+        empty.style.display = 'none';
+
+        favs.forEach(f => {
+            const card = document.createElement('div');
+            card.className = 'fav-card';
+            card.innerHTML = `
+                <button class="fav-remove" data-id="${f.id}">✕</button>
+                <h4>${f.projectIcon} ${f.partName}</h4>
+                <p>${f.partDesc.slice(0, 100)}</p>
+                <div class="fav-project">${f.projectName}</div>
+            `;
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.fav-remove')) return;
+                const proj = state.projects.find(p => p.id === f.projectId);
+                if (proj) {
+                    openExploder(proj);
+                    setTimeout(() => {
+                        const mesh = exploderFlatParts.find(m => m.userData.partId === f.partId || m.userData.partName === f.partName);
+                        if (mesh) handlePartClick(mesh);
+                    }, 500);
+                }
+            });
+            card.querySelector('.fav-remove').addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await db.del('favorites', f.id);
+                renderFavorites();
+            });
+            list.appendChild(card);
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 3. GUIDED TOUR
+    // ═══════════════════════════════════════════════════════════
+    const TOUR_STEPS = [
+        { target: '#grid-container', text: 'Welcome to JARVIS 3D! This is your Project Grid — 9 built-in models to explore. Click any card to open it.', pos: 'center' },
+        { target: '#floating-nav', text: 'This is your floating navigation. Drag it anywhere. Use it to switch between sections.', pos: 'left' },
+        { target: '#search-btn', text: 'Press Ctrl+K or / to search projects, parts, and actions instantly.', pos: 'bottom' },
+        { target: '#ai-bubble', text: 'Click the JARVIS bubble to chat with your AI assistant. It knows what you\'re doing.', pos: 'left' },
+        { target: '.project-card:first-child', text: 'Click this card to open the Part Exploder — where the magic happens. Every part is clickable, 5 levels deep.', pos: 'right' },
+    ];
+
+    function initGuidedTour() {
+        // Auto-start tour on first visit
+        setTimeout(async () => {
+            const seen = await db.get('settings', 'tour-seen');
+            if (!seen) startTour();
+        }, 2000);
+
+        document.getElementById('tour-skip').addEventListener('click', endTour);
+        document.getElementById('tour-next').addEventListener('click', nextTourStep);
+    }
+
+    let tourStep = 0;
+    function startTour() {
+        tourStep = 0;
+        document.getElementById('tour-overlay').classList.remove('hidden');
+        showTourStep();
+    }
+
+    function showTourStep() {
+        if (tourStep >= TOUR_STEPS.length) { endTour(); return; }
+        const step = TOUR_STEPS[tourStep];
+        const target = document.querySelector(step.target);
+        if (!target) { tourStep++; showTourStep(); return; }
+
+        const rect = target.getBoundingClientRect();
+        const spotlight = document.getElementById('tour-spotlight');
+        spotlight.style.left = (rect.left - 4) + 'px';
+        spotlight.style.top = (rect.top - 4) + 'px';
+        spotlight.style.width = (rect.width + 8) + 'px';
+        spotlight.style.height = (rect.height + 8) + 'px';
+
+        const tooltip = document.getElementById('tour-tooltip');
+        document.getElementById('tour-text').textContent = step.text;
+        document.getElementById('tour-step-ind').textContent = `STEP ${tourStep + 1} / ${TOUR_STEPS.length}`;
+        document.getElementById('tour-next').textContent = tourStep === TOUR_STEPS.length - 1 ? 'DONE' : 'NEXT';
+
+        // Position tooltip
+        let tx = rect.right + 20, ty = rect.top;
+        if (step.pos === 'left') { tx = rect.left - 370; }
+        if (step.pos === 'bottom') { tx = rect.left; ty = rect.bottom + 20; }
+        if (step.pos === 'center') { tx = rect.left + rect.width / 2 - 175; ty = rect.bottom + 20; }
+        tx = Math.max(10, Math.min(tx, window.innerWidth - 370));
+        ty = Math.max(10, Math.min(ty, window.innerHeight - 200));
+        tooltip.style.left = tx + 'px';
+        tooltip.style.top = ty + 'px';
+    }
+
+    function nextTourStep() { tourStep++; showTourStep(); }
+
+    async function endTour() {
+        document.getElementById('tour-overlay').classList.add('hidden');
+        await db.put('settings', { id: 'tour-seen', value: true });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 4. ASSEMBLY ANIMATION TIMELINE
+    // ═══════════════════════════════════════════════════════════
+    function initAssemblyTimeline() {
+        const slider = document.getElementById('explode-slider');
+        slider.addEventListener('input', () => {
+            const val = parseInt(slider.value) / 100;
+            exploderExplodeProgress = 1 - val;
+            updateExplodePositions();
+        });
+    }
+
+    // Show timeline when exploder opens
+    const origOpenExploder = openExploder;
+    // We'll hook into the existing flow
+
+    // ═══════════════════════════════════════════════════════════
+    // 5. MOBILE GESTURES
+    // ═══════════════════════════════════════════════════════════
+    function initMobileGestures() {
+        const canvas = document.getElementById('part-detail-canvas');
+        if (!canvas) return;
+
+        let touchStartDist = 0;
+        let touchStartAngle = 0;
+        let lastTouchX = 0, lastTouchY = 0;
+        let touching = false;
+
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                touchStartDist = Math.hypot(dx, dy);
+                touchStartAngle = Math.atan2(dy, dx);
+            } else if (e.touches.length === 1) {
+                touching = true;
+                lastTouchX = e.touches[0].clientX;
+                lastTouchY = e.touches[0].clientY;
+            }
+        }, { passive: true });
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (e.touches.length === 2) {
+                // Pinch to zoom
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const dist = Math.hypot(dx, dy);
+                const scale = dist / touchStartDist;
+                if (exploderCamera) {
+                    exploderCamera.position.multiplyScalar(1 / scale);
+                    const d = exploderCamera.position.length();
+                    if (d < 2) exploderCamera.position.setLength(2);
+                    if (d > 15) exploderCamera.position.setLength(15);
+                }
+                touchStartDist = dist;
+
+                // Two-finger rotate
+                const angle = Math.atan2(dy, dx);
+                const angleDelta = angle - touchStartAngle;
+                exploderRotation.y += angleDelta;
+                touchStartAngle = angle;
+            } else if (e.touches.length === 1 && touching) {
+                // Single finger rotate
+                const dx = e.touches[0].clientX - lastTouchX;
+                const dy = e.touches[0].clientY - lastTouchY;
+                exploderRotation.y += dx * 0.005;
+                exploderRotation.x += dy * 0.005;
+                exploderRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, exploderRotation.x));
+                lastTouchX = e.touches[0].clientX;
+                lastTouchY = e.touches[0].clientY;
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', () => { touching = false; }, { passive: true });
+
+        // Also handle touch on project cards for mobile tap
+        document.querySelectorAll('.project-card').forEach(card => {
+            card.addEventListener('touchend', (e) => {
+                e.preventDefault();
+                card.click();
+            });
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 6. ACHIEVEMENTS
+    // ═══════════════════════════════════════════════════════════
+    const ACHIEVEMENT_DEFS = [
+        { id: 'first_view', name: 'First Steps', desc: 'Opened your first project' },
+        { id: 'explorer', name: 'Explorer', desc: 'Viewed all 9 built-in projects' },
+        { id: 'deep_diver', name: 'Deep Diver', desc: 'Drilled 5 levels deep into a part' },
+        { id: 'first_favorite', name: 'Bookworm', desc: 'Favorited your first part' },
+        { id: 'collector', name: 'Collector', desc: 'Favorited 10 parts' },
+        { id: 'first_upload', name: 'Creator', desc: 'Uploaded your first 3D model' },
+        { id: 'voice_user', name: 'Talk to Me', desc: 'Used voice commands' },
+        { id: 'tour_complete', name: 'Oriented', desc: 'Completed the guided tour' },
+        { id: 'theme_changer', name: 'Stylish', desc: 'Changed the theme' },
+        { id: 'all_parts', name: 'Completionist', desc: 'Inspected 90 unique parts' },
+    ];
+
+    let viewedProjects = new Set();
+    let viewedParts = new Set();
+
+    function initAchievements() {
+        // Track project views
+        const origShowSection = showSection;
+    }
+
+    async function checkAchievement(id, title, desc) {
+        const existing = await db.get('achievements', id);
+        if (existing) return;
+        await db.put('achievements', { id, unlockedAt: Date.now() });
+        showAchievementToast(title || id, desc || '');
+    }
+
+    function showAchievementToast(title, desc) {
+        const toast = document.getElementById('achievement-toast');
+        document.getElementById('achievement-title').textContent = title;
+        document.getElementById('achievement-desc').textContent = desc;
+        toast.classList.remove('hidden');
+        toast.classList.add('show');
+        setTimeout(() => {
+            toast.classList.remove('show');
+        }, 3000);
+    }
+
+    // Hook into project open to track achievements
+    const origLogAction = logAction;
+
+    // ═══════════════════════════════════════════════════════════
+    // 7. VOICE COMMANDS
+    // ═══════════════════════════════════════════════════════════
+    let voiceRecognition = null;
+    let voiceActive = false;
+
+    function initVoiceCommands() {
+        const btn = document.getElementById('voice-btn');
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+            btn.title = 'Voice not supported in this browser';
+            btn.style.opacity = '0.3';
+            btn.style.cursor = 'not-allowed';
+            return;
+        }
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        voiceRecognition = new SpeechRecognition();
+        voiceRecognition.continuous = false;
+        voiceRecognition.interimResults = false;
+        voiceRecognition.lang = 'en-US';
+
+        voiceRecognition.onresult = (event) => {
+            const transcript = event.results[0][0].transcript.toLowerCase().trim();
+            processVoiceCommand(transcript);
+        };
+
+        voiceRecognition.onend = () => {
+            voiceActive = false;
+            btn.classList.remove('listening');
+            document.getElementById('voice-status').classList.add('hidden');
+        };
+
+        voiceRecognition.onerror = () => {
+            voiceActive = false;
+            btn.classList.remove('listening');
+            document.getElementById('voice-status').classList.add('hidden');
+        };
+
+        btn.addEventListener('click', () => {
+            if (voiceActive) {
+                voiceRecognition.stop();
+            } else {
+                voiceActive = true;
+                btn.classList.add('listening');
+                document.getElementById('voice-status').classList.remove('hidden');
+                document.getElementById('voice-text').textContent = 'Listening...';
+                voiceRecognition.start();
+                checkAchievement('voice_user', 'Talk to Me', 'Used voice commands');
+            }
+        });
+    }
+
+    function processVoiceCommand(text) {
+        const voiceText = document.getElementById('voice-text');
+        voiceText.textContent = `"${text}"`;
+
+        // Navigation commands
+        if (text.includes('home') || text.includes('projects')) { showSection('home'); return; }
+        if (text.includes('api') || text.includes('settings')) { showSection('api'); return; }
+        if (text.includes('room') || text.includes('collaborate')) { showSection('room'); return; }
+        if (text.includes('upload') || text.includes('import')) { showSection('upload'); return; }
+        if (text.includes('favorite')) { showSection('favorites'); return; }
+
+        // Exploder commands
+        if (text.includes('explode')) {
+            if (exploderModel) triggerExplodeToggle();
+            return;
+        }
+        if (text.includes('assemble') || text.includes('put together')) {
+            if (exploderModel && exploderExploded) triggerExplodeToggle();
+            return;
+        }
+        if (text.includes('reset')) {
+            if (exploderModel) {
+                exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 };
+                exploderExploded = false; exploderExplodeProgress = 0;
+                exploderCamTarget.set(0, 2, 6);
+            }
+            return;
+        }
+        if (text.includes('x-ray') || text.includes('wireframe')) {
+            document.getElementById('btn-xray')?.click();
+            return;
+        }
+        if (text.includes('screenshot') || text.includes('capture')) {
+            takeScreenshot();
+            return;
+        }
+        if (text.includes('search')) {
+            JarvisSearch.openSearch();
+            return;
+        }
+        if (text.includes('sound off') || text.includes('mute')) {
+            if (JarvisSounds.isEnabled()) JarvisSounds.toggle();
+            return;
+        }
+        if (text.includes('sound on') || text.includes('unmute')) {
+            if (!JarvisSounds.isEnabled()) JarvisSounds.toggle();
+            return;
+        }
+
+        // Project search by name
+        for (const proj of state.projects) {
+            if (text.includes(proj.name.toLowerCase().split(' ')[0])) {
+                openExploder(proj);
+                return;
+            }
+        }
+
+        // Part search
+        if (state.selectedProject) {
+            for (const part of state.selectedProject.parts) {
+                if (text.includes(part.name.toLowerCase())) {
+                    const mesh = exploderFlatParts.find(m => m.userData.partName === part.name);
+                    if (mesh) handlePartClick(mesh);
+                    return;
+                }
+            }
+        }
+
+        voiceText.textContent = `"${text}" — not recognized`;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 8. STRESS TEST
+    // ═══════════════════════════════════════════════════════════
+    let stressMode = false;
+
+    function initStressTest() {
+        document.getElementById('btn-stress').addEventListener('click', toggleStressMode);
+    }
+
+    function toggleStressMode() {
+        stressMode = !stressMode;
+        const btn = document.getElementById('btn-stress');
+        btn.classList.toggle('active-stress', stressMode);
+        btn.textContent = stressMode ? '🧪 Stress ON' : '🧪 Stress';
+
+        if (stressMode) {
+            applyStressColors();
+            document.getElementById('exploder-hint').textContent = '🧪 Stress Test: Red = high load, Blue = low load';
+        } else {
+            resetStressColors();
+            document.getElementById('exploder-hint').textContent = '🖱️ Click any part to explore · Drag to rotate';
+        }
+    }
+
+    function applyStressColors() {
+        if (!exploderFlatParts.length) return;
+        exploderFlatParts.forEach((mesh, i) => {
+            if (!mesh.material) return;
+            // Simulate stress based on position (lower = more stress, outer = more stress)
+            const y = mesh.position.y;
+            const dist = Math.sqrt(mesh.position.x ** 2 + mesh.position.z ** 2);
+            const stress = Math.min(1, Math.max(0, (2 - y) * 0.3 + dist * 0.4 + Math.random() * 0.2));
+
+            // Interpolate blue (low) to red (high)
+            const r = Math.floor(stress * 255);
+            const b = Math.floor((1 - stress) * 255);
+            const color = (r << 16) | (50 << 8) | b;
+
+            mesh.userData._stressOriginalColor = mesh.material.color.getHex();
+            mesh.material.color.setHex(color);
+            mesh.material.emissive.setHex(color);
+            mesh.material.emissiveIntensity = 0.3;
+        });
+    }
+
+    function resetStressColors() {
+        exploderFlatParts.forEach(mesh => {
+            if (!mesh.material || mesh.userData._stressOriginalColor === undefined) return;
+            mesh.material.color.setHex(mesh.userData._stressOriginalColor);
+            mesh.material.emissive.setHex(mesh.userData._stressOriginalColor);
+            mesh.material.emissiveIntensity = 0.05;
+            delete mesh.userData._stressOriginalColor;
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 9. REAL-TIME 3D SYNC (P2P state sharing)
+    // ═══════════════════════════════════════════════════════════
+    // Hooks into existing room system — sends 3D state over data channel
+    let syncInterval = null;
+
+    function init3DSync() {
+        // This is called from within the room system when a peer connects
+    }
+
+    function startStateSync() {
+        if (syncInterval) return;
+        syncInterval = setInterval(() => {
+            if (!state.peerConn?.open) return;
+            state.peerConn.send({
+                type: '3d_state',
+                projectId: state.selectedProject?.id || null,
+                partName: state.selectedPart?.name || null,
+                rotation: { ...exploderRotation },
+                exploded: exploderExploded,
+            });
+        }, 200); // 5 updates per second
+    }
+
+    function stopStateSync() {
+        if (syncInterval) { clearInterval(syncInterval); syncInterval = null; }
+    }
+
+    function handleRemote3DState(data) {
+        if (data.type !== '3d_state') return;
+        // If peer selected a project, open it on our side too
+        if (data.projectId && data.projectId !== state.selectedProject?.id) {
+            const proj = state.projects.find(p => p.id === data.projectId);
+            if (proj) openExploder(proj);
+        }
+        // Sync rotation (smooth)
+        if (data.rotation) {
+            exploderRotTarget.x = data.rotation.x;
+            exploderRotTarget.y = data.rotation.y;
+        }
+        // Sync explode state
+        if (data.exploded !== undefined && data.exploded !== exploderExploded) {
+            exploderExploded = data.exploded;
+            document.getElementById('btn-explode').textContent = exploderExploded ? '🔧 Assemble' : '💥 Explode';
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 10. PLUGIN SYSTEM
+    // ═══════════════════════════════════════════════════════════
+    const pluginHooks = {};
+
+    function initPluginSystem() {
+        window.JarvisPlugins = {
+            register: (name, plugin) => {
+                console.log(`[Plugin] Registered: ${name}`);
+                if (plugin.onInit) plugin.onInit(state, db);
+                if (plugin.onPartSelected) registerHook('partSelected', plugin.onPartSelected);
+                if (plugin.onProjectOpened) registerHook('projectOpened', plugin.onProjectOpened);
+                if (plugin.onSectionChanged) registerHook('sectionChanged', plugin.onSectionChanged);
+                if (plugin.commands) {
+                    Object.entries(plugin.commands).forEach(([cmd, handler]) => {
+                        if (!pluginHooks.commands) pluginHooks.commands = {};
+                        pluginHooks.commands[cmd] = handler;
+                    });
+                }
+            },
+            getState: () => ({
+                currentSection: state.currentSection,
+                selectedProject: state.selectedProject,
+                selectedPart: state.selectedPart,
+                projects: state.projects,
+            }),
+            trigger: (hook, data) => fireHook(hook, data),
+        };
+    }
+
+    function registerHook(hook, handler) {
+        if (!pluginHooks[hook]) pluginHooks[hook] = [];
+        pluginHooks[hook].push(handler);
+    }
+
+    function fireHook(hook, data) {
+        (pluginHooks[hook] || []).forEach(handler => {
+            try { handler(data); } catch (e) { console.error(`[Plugin] Hook error (${hook}):`, e); }
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SCREENSHOT (quick controls)
+    // ═══════════════════════════════════════════════════════════
+    function initScreenshot() {
+        document.getElementById('screenshot-btn').addEventListener('click', takeScreenshot);
+        document.getElementById('btn-screenshot-view').addEventListener('click', takeScreenshot);
+    }
+
+    function takeScreenshot() {
+        JarvisSounds.click();
+        const flash = document.getElementById('screenshot-flash');
+        flash.classList.add('flash');
+        setTimeout(() => flash.classList.remove('flash'), 200);
+
+        const exportCanvas = document.createElement('canvas');
+        const w = 1920, h = 1080;
+        exportCanvas.width = w; exportCanvas.height = h;
+        const ctx = exportCanvas.getContext('2d');
+
+        ctx.fillStyle = '#0a0a12';
+        ctx.fillRect(0, 0, w, h);
+
+        let sourceCanvas = null;
+        if (state.selectedProject && !document.getElementById('exploder-view').classList.contains('hidden')) {
+            sourceCanvas = document.getElementById('part-detail-canvas');
+        } else {
+            sourceCanvas = document.getElementById('three-canvas');
+        }
+
+        if (sourceCanvas && sourceCanvas.width > 0) {
+            try { ctx.drawImage(sourceCanvas, 0, 0, w, h); } catch (e) {}
+        }
+
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, h - 60, w, 60);
+        ctx.fillStyle = '#00d4ff';
+        ctx.font = '16px Orbitron, monospace';
+        ctx.fillText('JARVIS 3D', 20, h - 35);
+        ctx.fillStyle = '#888';
+        ctx.font = '12px Rajdhani, sans-serif';
+        const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        const info = state.selectedProject ? `${state.selectedProject.name}${state.selectedPart ? ' → ' + state.selectedPart.name : ''}` : 'Project Grid';
+        ctx.fillText(`${info}  |  ${timestamp}`, 20, h - 15);
+
+        const link = document.createElement('a');
+        link.download = `jarvis3d-${Date.now()}.png`;
+        link.href = exportCanvas.toDataURL('image/png');
+        link.click();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // HOOKS into existing functions for achievements + favorites + timeline
+    // ═══════════════════════════════════════════════════════════
+    // Track achievements on project open
+    const _origOpenExploder = openExploder;
+    // We modify openExploder inline by hooking into showPartInfo
+
+    // Show timeline when exploder opens
+    function showTimeline() {
+        document.getElementById('assembly-timeline').classList.remove('hidden');
+    }
+    function hideTimeline() {
+        document.getElementById('assembly-timeline').classList.add('hidden');
     }
 
     // ═══════════════════════════════════════════════════════════

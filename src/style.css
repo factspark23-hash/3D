@@ -80,7 +80,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font-body);
 .scanlines { position: fixed; inset: 0; z-index: 1; pointer-events: none; background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,212,255,.015) 2px,rgba(0,212,255,.015) 4px); }
 
 /* ─── Section Views ─── */
-.section-view { position: fixed; top: 0; left: 0; right: 120px; bottom: 60px; z-index: 50; display: flex; flex-direction: column; padding: 20px 30px; transition: opacity .4s ease; overflow-y: auto; }
+.section-view { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 50; display: flex; flex-direction: column; padding: 20px 130px 70px 30px; transition: opacity .4s ease; overflow-y: auto; }
 .section-view.hidden { display: none; }
 .section-title { font-family: var(--font-display); font-size: 16px; letter-spacing: 4px; color: var(--primary); margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
 
@@ -290,7 +290,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font-body);
 /* ─── Responsive ─── */
 @media (max-width: 900px) {
     #grid-container { grid-template-columns: repeat(2, 1fr); }
-    .section-view { right: 80px; padding: 15px; }
+    .section-view { padding: 15px 90px 60px 15px; }
     .exploder-side { width: 20%; }
     .exploder-center { width: 60%; }
     .gesture-panel { flex-direction: column; }
@@ -306,7 +306,7 @@ body { background: var(--bg); color: var(--text); font-family: var(--font-body);
 
 /* ─── Theme Selector ─── */
 #theme-selector {
-    position: fixed; left: 70px; top: 20px; z-index: 150;
+    position: fixed; z-index: 150;
     background: rgba(0,10,20,0.95); border: 1px solid var(--border);
     backdrop-filter: blur(10px); padding: 6px 0;
     min-width: 140px;

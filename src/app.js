@@ -2269,7 +2269,13 @@
 
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
+            const willShow = selector.classList.contains('hidden');
             selector.classList.toggle('hidden');
+            if (willShow) {
+                const rect = btn.getBoundingClientRect();
+                selector.style.left = rect.left + 'px';
+                selector.style.top = (rect.bottom + 8) + 'px';
+            }
         });
 
         document.addEventListener('click', (e) => {

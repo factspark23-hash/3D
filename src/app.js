@@ -2392,8 +2392,6 @@
         if (measureInfoEl) { measureInfoEl.remove(); measureInfoEl = null; }
     }
 
-    // Hook into existing click handler
-    const origHandlePartClick = handlePartClick;
 
     // ═══════════════════════════════════════════════════════════
     // COMPARE MODE

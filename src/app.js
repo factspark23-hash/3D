@@ -383,11 +383,28 @@
 
     function showPartInCenter(part) {
         if (!partScene) initPartRenderer();
-        if (partMesh) partScene.remove(partMesh);
+        if (partMesh) { partScene.remove(partMesh); partMesh = null; }
 
-        const geo = new THREE.IcosahedronGeometry(1, 1);
-        const mat = new THREE.MeshPhongMaterial({ color: part.color, emissive: part.color, emissiveIntensity: 0.2, wireframe: false, transparent: true, opacity: 0.9 });
-        partMesh = new THREE.Mesh(geo, mat);
+        // Build real geometry for this specific part
+        try {
+            partMesh = JarvisGeometries.buildPartMesh(part.id, part.color);
+        } catch (e) {
+            // Fallback
+            const geo = new THREE.IcosahedronGeometry(0.8, 1);
+            const mat = new THREE.MeshPhongMaterial({ color: part.color, emissive: part.color, emissiveIntensity: 0.2 });
+            partMesh = new THREE.Mesh(geo, mat);
+        }
+
+        // Center and scale the mesh
+        const box = new THREE.Box3().setFromObject(partMesh);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+            partMesh.scale.setScalar(2 / maxDim);
+            const center = box.getCenter(new THREE.Vector3());
+            partMesh.position.sub(center.multiplyScalar(2 / maxDim));
+        }
+
         partScene.add(partMesh);
 
         document.getElementById('part-detail-name').textContent = part.name;
@@ -630,41 +647,39 @@
         } catch (e) { return; }
         const miniScene = new THREE.Scene();
         const miniCam = new THREE.PerspectiveCamera(50, w / h, 0.1, 100);
-        miniCam.position.set(4, 3, 4);
+        miniCam.position.set(0, 2, 5);
         miniCam.lookAt(0, 0, 0);
         miniRenderer.setSize(w, h);
         miniRenderer.setClearColor(0x000000, 0);
 
-        miniScene.add(new THREE.AmbientLight(0xffffff, 0.4));
-        const dl = new THREE.DirectionalLight(0xffffff, 0.6); dl.position.set(3,5,3); miniScene.add(dl);
+        miniScene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const dl = new THREE.DirectionalLight(0xffffff, 0.7); dl.position.set(3,5,3); miniScene.add(dl);
+        const dl2 = new THREE.DirectionalLight(0x00d4ff, 0.3); dl2.position.set(-3,2,-3); miniScene.add(dl2);
 
-        // Build a simple shape from parts
-        const group = new THREE.Group();
-        proj.parts.forEach((part, i) => {
-            const size = 0.3 + Math.random() * 0.3;
-            const geo = i % 3 === 0 ? new THREE.BoxGeometry(size, size, size) :
-                        i % 3 === 1 ? new THREE.SphereGeometry(size * 0.5, 8, 8) :
-                        new THREE.CylinderGeometry(size * 0.3, size * 0.3, size, 8);
-            const mat = new THREE.MeshPhongMaterial({ color: part.color, transparent: true, opacity: 0.85 });
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.position.set(
-                (Math.random() - 0.5) * 2,
-                (i / proj.parts.length) * 3 - 1,
-                (Math.random() - 0.5) * 2
-            );
-            group.add(mesh);
-        });
-        miniScene.add(group);
+        // Build real geometry model for this project
+        let model;
+        try {
+            model = JarvisGeometries.buildCardModel(proj.id);
+        } catch (e) {
+            // Fallback: simple colored boxes
+            model = new THREE.Group();
+            proj.parts.forEach((part, i) => {
+                const geo = new THREE.BoxGeometry(0.3, 0.3, 0.3);
+                const mat = new THREE.MeshPhongMaterial({ color: part.color, transparent: true, opacity: 0.85 });
+                const mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set((i % 3 - 1) * 0.5, (Math.floor(i / 3) - 1) * 0.5, 0);
+                model.add(mesh);
+            });
+        }
+        miniScene.add(model);
 
         let frameId;
         function animateCard() {
             frameId = requestAnimationFrame(animateCard);
-            group.rotation.y += 0.008;
+            model.rotation.y += 0.008;
             miniRenderer.render(miniScene, miniCam);
         }
         animateCard();
-
-        // Stop animation when card is removed
         canvas._stopAnim = () => cancelAnimationFrame(frameId);
     }
 
@@ -697,6 +712,9 @@
         leftEl.innerHTML = '';
         rightEl.innerHTML = '';
 
+        // Track expanded groups
+        if (!state._expandedGroups) state._expandedGroups = new Set();
+
         // Group parts
         const groups = {};
         proj.parts.forEach(p => {
@@ -712,7 +730,6 @@
             const target = gi < half ? leftEl : rightEl;
             const groupEl = document.createElement('div');
             groupEl.className = 'part-group';
-            groupEl.style.animationDelay = (gi * 0.1) + 's';
 
             const header = document.createElement('div');
             header.className = 'part-group-header';
@@ -720,21 +737,86 @@
             groupEl.appendChild(header);
 
             groups[gName].forEach((part, pi) => {
-                const icon = document.createElement('div');
-                icon.className = 'part-icon' + (state.selectedPart?.id === part.id ? ' selected' : '');
-                icon.style.animationDelay = (gi * 0.1 + pi * 0.05) + 's';
-                icon.innerHTML = `<span class="part-dot" style="background:#${part.color.toString(16).padStart(6,'0')}"></span><span class="part-label">${part.name}</span>`;
-                icon.addEventListener('click', () => {
-                    logAction('part_click', part.name);
-                    state.selectedPart = part;
-                    renderExploderParts(proj);
-                    showPartInCenter(part);
-                });
-                groupEl.appendChild(icon);
+                // Check if this is an expandable group
+                if (part.expandable && part.subParts) {
+                    const isExpanded = state._expandedGroups.has(part.id);
+
+                    // Group header (clickable to expand)
+                    const groupIcon = document.createElement('div');
+                    groupIcon.className = 'part-icon' + (isExpanded ? ' selected' : '');
+                    groupIcon.innerHTML = `<span class="part-dot" style="background:#${part.color.toString(16).padStart(6,'0')}"></span><span class="part-label">${isExpanded ? '▼' : '▶'} ${part.name}</span>`;
+                    groupIcon.addEventListener('click', () => {
+                        if (isExpanded) {
+                            state._expandedGroups.delete(part.id);
+                        } else {
+                            state._expandedGroups.add(part.id);
+                        }
+                        renderExploderParts(proj);
+                    });
+                    groupEl.appendChild(groupIcon);
+
+                    // Show sub-parts if expanded
+                    if (isExpanded) {
+                        part.subParts.forEach((sub, si) => {
+                            const subIcon = document.createElement('div');
+                            subIcon.className = 'part-icon' + (state.selectedPart?.id === sub.id ? ' selected' : '');
+                            subIcon.style.paddingLeft = '24px';
+                            subIcon.style.animationDelay = (si * 0.03) + 's';
+                            subIcon.innerHTML = `<span class="part-dot" style="background:#${sub.color.toString(16).padStart(6,'0')};width:6px;height:6px"></span><span class="part-label" style="font-size:9px">${sub.name}</span>`;
+                            subIcon.addEventListener('click', () => {
+                                logAction('part_click', sub.name);
+                                state.selectedPart = sub;
+                                renderExploderParts(proj);
+                                showPartInCenter(sub);
+                            });
+                            groupEl.appendChild(subIcon);
+                        });
+                    }
+                } else {
+                    // Regular part
+                    const icon = document.createElement('div');
+                    icon.className = 'part-icon' + (state.selectedPart?.id === part.id ? ' selected' : '');
+                    icon.style.animationDelay = (pi * 0.05) + 's';
+                    icon.innerHTML = `<span class="part-dot" style="background:#${part.color.toString(16).padStart(6,'0')}"></span><span class="part-label">${part.name}</span>`;
+                    icon.addEventListener('click', () => {
+                        logAction('part_click', part.name);
+                        state.selectedPart = part;
+                        renderExploderParts(proj);
+                        showPartInCenter(part);
+                    });
+                    groupEl.appendChild(icon);
+                }
             });
 
             target.appendChild(groupEl);
         });
+
+        // Add expand/collapse all button if there are expandable groups
+        const hasExpandable = proj.parts.some(p => p.expandable);
+        if (hasExpandable) {
+            const controlsEl = document.createElement('div');
+            controlsEl.style.cssText = 'width:100%;display:flex;gap:10px;justify-content:center;margin-top:10px;';
+
+            const expandAll = document.createElement('button');
+            expandAll.className = 'btn-secondary';
+            expandAll.textContent = 'Expand All';
+            expandAll.addEventListener('click', () => {
+                proj.parts.filter(p => p.expandable).forEach(p => state._expandedGroups.add(p.id));
+                renderExploderParts(proj);
+            });
+
+            const collapseAll = document.createElement('button');
+            collapseAll.className = 'btn-secondary';
+            collapseAll.textContent = 'Collapse All';
+            collapseAll.addEventListener('click', () => {
+                state._expandedGroups.clear();
+                renderExploderParts(proj);
+            });
+
+            controlsEl.appendChild(expandAll);
+            controlsEl.appendChild(collapseAll);
+            leftEl.parentElement.appendChild(controlsEl);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -885,7 +967,7 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    // GESTURE SECTION
+    // GESTURE SECTION (MediaPipe Hands — real 21-landmark tracking)
     // ═══════════════════════════════════════════════════════════
     function initGestureSection() {
         document.getElementById('gesture-start').addEventListener('click', startGestureCamera);
@@ -897,75 +979,90 @@
     }
 
     async function startGestureCamera() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
-            state.gestureStream = stream;
-            document.getElementById('gesture-video').srcObject = stream;
-            document.getElementById('gesture-start').style.display = 'none';
-            document.getElementById('gesture-status').textContent = 'Camera active — detect gestures';
+        const video = document.getElementById('gesture-video');
+        const canvas = document.getElementById('gesture-canvas');
+        const status = document.getElementById('gesture-status');
 
-            // Basic hand detection using canvas pixel analysis
-            startGestureDetection();
+        status.textContent = 'Loading hand tracking model...';
+
+        try {
+            await JarvisGestures.init(video, canvas, (gestureType, landmarks) => {
+                // Handle detected gesture
+                if (state.gestureRecording && landmarks) {
+                    JarvisGestures.captureFrame(landmarks);
+                    state.gestureSamples.push(landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 })));
+                    status.textContent = `Recording... ${state.gestureSamples.length} frames`;
+
+                    if (state.gestureSamples.length >= 60) {
+                        finishGestureRecording();
+                    }
+                    return;
+                }
+
+                // Check if gesture matches any saved gesture
+                const recognized = checkGestureMatch(gestureType, landmarks);
+                if (recognized) {
+                    status.textContent = `Detected: ${recognized.name} → ${recognized.action}`;
+                    executeGestureAction(recognized.action);
+                } else if (gestureType) {
+                    status.textContent = `Hand: ${gestureType.replace(/_/g, ' ')}`;
+                }
+            });
+
+            document.getElementById('gesture-start').style.display = 'none';
+            canvas.width = video.videoWidth || 640;
+            canvas.height = video.videoHeight || 480;
+            status.textContent = 'Hand tracking active — show a gesture';
         } catch (err) {
-            document.getElementById('gesture-status').textContent = 'Camera denied';
+            console.error('Gesture init error:', err);
+            status.textContent = 'Camera denied or model failed to load';
         }
     }
 
-    function startGestureDetection() {
-        const video = document.getElementById('gesture-video');
-        const canvas = document.getElementById('gesture-canvas');
-        const ctx = canvas.getContext('2d');
+    function checkGestureMatch(gestureType, landmarks) {
+        if (!state.gestureModels.length) return null;
 
-        canvas.width = 320; canvas.height = 240;
+        // First check simple gesture types (fist, open_palm, etc.)
+        for (const g of state.gestureModels) {
+            if (g.simpleType && g.simpleType === gestureType) {
+                return g;
+            }
+        }
 
-        function detect() {
-            if (!state.gestureStream) return;
-            requestAnimationFrame(detect);
+        // If we have landmarks, compare against recorded templates
+        if (landmarks && state.gestureModels.some(g => g.template && g.template.length)) {
+            const currentFrame = landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 }));
+            let bestMatch = null;
+            let bestScore = 0;
 
-            ctx.drawImage(video, 0, 0, 320, 240);
-            const frame = ctx.getImageData(0, 0, 320, 240);
-
-            if (state.gestureRecording) {
-                // Capture frame data as sample
-                const sample = extractHandFeatures(frame);
-                if (sample) state.gestureSamples.push(sample);
-
-                document.getElementById('gesture-status').textContent = `Recording... ${state.gestureSamples.length} frames`;
-
-                if (state.gestureSamples.length >= 60) {
-                    finishGestureRecording();
+            for (const g of state.gestureModels) {
+                if (!g.template || !g.template.length) continue;
+                const score = JarvisGestures.compareTemplates([currentFrame], g.template);
+                if (score > bestScore && score > 0.7) {
+                    bestScore = score;
+                    bestMatch = g;
                 }
             }
 
-            // Draw hand region overlay (simple motion detection)
-            ctx.strokeStyle = 'rgba(0, 212, 255, 0.5)';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(80, 40, 160, 160);
+            return bestMatch;
         }
-        detect();
+
+        return null;
     }
 
-    function extractHandFeatures(frame) {
-        // Simple feature: average color + position of brightest region
-        const data = frame.data;
-        let sumR = 0, sumG = 0, sumB = 0, count = 0;
-        let maxBright = 0, maxX = 0, maxY = 0;
-
-        for (let y = 40; y < 200; y += 4) {
-            for (let x = 80; x < 240; x += 4) {
-                const i = (y * 320 + x) * 4;
-                const brightness = data[i] + data[i+1] + data[i+2];
-                sumR += data[i]; sumG += data[i+1]; sumB += data[i+2]; count++;
-                if (brightness > maxBright) { maxBright = brightness; maxX = x; maxY = y; }
-            }
+    function executeGestureAction(action) {
+        switch (action) {
+            case 'navigate_home': showSection('home'); break;
+            case 'navigate_api': showSection('api'); break;
+            case 'navigate_room': showSection('room'); break;
+            case 'navigate_upload': showSection('upload'); break;
+            case 'navigate_gesture': showSection('gesture'); break;
+            case 'scroll_up': window.scrollBy(0, -200); break;
+            case 'scroll_down': window.scrollBy(0, 200); break;
+            case 'zoom_in': document.body.style.zoom = (parseFloat(document.body.style.zoom || 1) + 0.1); break;
+            case 'zoom_out': document.body.style.zoom = Math.max(0.5, (parseFloat(document.body.style.zoom || 1) - 0.1)); break;
         }
-
-        if (count === 0) return null;
-        return {
-            avgColor: [sumR/count, sumG/count, sumB/count],
-            hotspot: [maxX / 320, maxY / 240],
-            brightness: maxBright / 765,
-        };
+        logAction('gesture_trigger', action);
     }
 
     function startGestureRecording() {
@@ -976,34 +1073,51 @@
         state.gestureRecording = true;
         state.gestureSamples = [];
         state._gestureTarget = { name, action };
+
+        JarvisGestures.startRecording();
+
         document.getElementById('gesture-record-start').textContent = 'Recording...';
         document.getElementById('gesture-record-start').disabled = true;
+        document.getElementById('gesture-status').textContent = 'Hold your gesture for 2 seconds...';
     }
 
     function finishGestureRecording() {
         state.gestureRecording = false;
         const { name, action } = state._gestureTarget;
 
-        // Calculate average features as the gesture template
-        const template = {
-            avgColor: [0, 0, 0],
-            hotspot: [0, 0],
-            brightness: 0,
-        };
-        state.gestureSamples.forEach(s => {
-            template.avgColor[0] += s.avgColor[0];
-            template.avgColor[1] += s.avgColor[1];
-            template.avgColor[2] += s.avgColor[2];
-            template.hotspot[0] += s.hotspot[0];
-            template.hotspot[1] += s.hotspot[1];
-            template.brightness += s.brightness;
-        });
-        const n = state.gestureSamples.length;
-        template.avgColor = template.avgColor.map(v => v / n);
-        template.hotspot = [template.hotspot[0] / n, template.hotspot[1] / n];
-        template.brightness /= n;
+        // Get the recorded frames from the gesture engine
+        const recordedFrames = JarvisGestures.stopRecording();
 
-        const gesture = { id: crypto.randomUUID().slice(0, 8), name, action, template, created: Date.now() };
+        // Use the landmarks captured via our state as the template
+        const template = state.gestureSamples.length > 0 ? state.gestureSamples : recordedFrames;
+
+        // Detect the primary gesture type from the last frame
+        let simpleType = null;
+        if (template.length > 0) {
+            const lastFrame = template[template.length - 1];
+            if (lastFrame.length === 21) {
+                // It's full landmark data — determine finger states
+                const lm = lastFrame;
+                const indexExt = lm[8].y < lm[6].y;
+                const middleExt = lm[12].y < lm[10].y;
+                const ringExt = lm[16].y < lm[14].y;
+                const pinkyExt = lm[20].y < lm[18].y;
+                const ext = [indexExt, middleExt, ringExt, pinkyExt].filter(Boolean).length;
+                if (ext === 0) simpleType = 'fist';
+                else if (ext === 4) simpleType = 'open_palm';
+                else if (indexExt && !middleExt && !ringExt && !pinkyExt) simpleType = 'point';
+                else if (indexExt && middleExt && !ringExt && !pinkyExt) simpleType = 'peace';
+            }
+        }
+
+        const gesture = {
+            id: crypto.randomUUID().slice(0, 8),
+            name, action,
+            template,
+            simpleType,
+            created: Date.now(),
+        };
+
         state.gestureModels.push(gesture);
         db.put('gestures', gesture);
 
@@ -1012,7 +1126,7 @@
         document.getElementById('gesture-name').value = '';
         document.getElementById('gesture-record-start').textContent = 'Start Recording';
         document.getElementById('gesture-record-start').disabled = false;
-        document.getElementById('gesture-status').textContent = `Gesture "${name}" saved!`;
+        document.getElementById('gesture-status').textContent = `Gesture "${name}" saved! (${template.length} frames captured)`;
     }
 
     async function loadGestures() {
@@ -1026,8 +1140,9 @@
         state.gestureModels.forEach(g => {
             const el = document.createElement('div');
             el.className = 'gesture-entry';
+            const typeLabel = g.simpleType ? `[${g.simpleType.replace(/_/g, ' ')}]` : `[${g.template?.length || 0} frames]`;
             el.innerHTML = `
-                <span class="g-name">${g.name}</span>
+                <span class="g-name">${g.name} ${typeLabel}</span>
                 <span class="g-action">${g.action.replace(/_/g, ' ')}</span>
                 <button class="g-delete" data-id="${g.id}">✕</button>
             `;
@@ -1132,42 +1247,86 @@
     }
 
     function autoGroupParts(parts) {
-        // Merge very small/named-similar parts into groups
-        const groups = {};
+        // Advanced grouping for high-density models (bikes, cars, rockets)
+        // Strategy: hierarchy-based + name similarity + spatial clustering
+
+        // Step 1: Group by parent hierarchy
+        const hierarchyGroups = {};
         parts.forEach(p => {
-            const g = p.group || 'Other';
-            if (!groups[g]) groups[g] = [];
-            groups[g].push(p);
+            const g = p.group || 'Ungrouped';
+            if (!hierarchyGroups[g]) hierarchyGroups[g] = [];
+            hierarchyGroups[g].push(p);
         });
 
-        // If a group has > 20 parts, split by name prefix
         const result = [];
-        Object.entries(groups).forEach(([gName, gParts]) => {
-            if (gParts.length <= 20) {
+
+        Object.entries(hierarchyGroups).forEach(([gName, gParts]) => {
+            if (gParts.length <= 15) {
+                // Small enough — keep as individual parts
                 result.push(...gParts);
-            } else {
-                const subgroups = {};
-                gParts.forEach(p => {
-                    const prefix = p.name.split(/[_\-\s]/)[0] || 'misc';
-                    if (!subgroups[prefix]) subgroups[prefix] = [];
-                    subgroups[prefix].push(p);
-                });
-                Object.entries(subgroups).forEach(([sName, sParts]) => {
-                    if (sParts.length === 1) {
-                        result.push(sParts[0]);
-                    } else {
-                        result.push({
-                            id: `group_${sName}`,
-                            name: `${sName} (${sParts.length})`,
-                            desc: `Group: ${sParts.map(p => p.name).join(', ')}`,
-                            color: sParts[0].color,
-                            group: gName,
-                            subParts: sParts,
-                        });
-                    }
-                });
+                return;
             }
+
+            // Step 2: Sub-group by naming patterns
+            const subgroups = {};
+            gParts.forEach(p => {
+                const name = p.name.toLowerCase();
+
+                // Detect common naming patterns
+                let category = 'Other';
+
+                // Body/frame parts
+                if (/body|frame|chassis|shell|hull|casing|panel|cover|cap/.test(name)) category = 'Body';
+                // Mechanical parts
+                else if (/engine|motor|piston|cylinder|crank|shaft|gear|bearing/.test(name)) category = 'Mechanical';
+                // Wheels/tires
+                else if (/wheel|tire|rim|hub|axle|brake|suspension|shock/.test(name)) category = 'Wheels & Suspension';
+                // Electronics
+                else if (/wire|cable|sensor|board|chip|led|light|lamp|bulb|connector/.test(name)) category = 'Electronics';
+                // Exhaust/emissions
+                else if (/exhaust|pipe|muffler|emission|catalytic/.test(name)) category = 'Exhaust';
+                // Interior
+                else if (/seat|dashboard|steering|console|door|window|mirror|handle/.test(name)) category = 'Interior';
+                // Aerodynamics
+                else if (/wing|spoiler|fin|flap|aileron|rudder|elevator|fairing/.test(name)) category = 'Aerodynamics';
+                // Propulsion
+                else if (/thruster|nozzle|prop|rotor|blade|combustion|turbine|injector/.test(name)) category = 'Propulsion';
+                // Structural
+                else if (/bolt|screw|nut|bracket|mount|support|strut|rib|spar|stringer/.test(name)) category = 'Fasteners & Structure';
+                // Fluid systems
+                else if (/tank|hose|pipe|valve|pump|filter|radiator|coolant|fuel|oil/.test(name)) category = 'Fluid Systems';
+                // Weapon/defense (for military models)
+                else if (/gun|cannon|missile|rocket|warhead|magazine|turret|armor|shield/.test(name)) category = 'Weaponry';
+                // Optics/sensors
+                else if (/camera|lens|sensor|radar|sonar|antenna|dish|transmitter|receiver/.test(name)) category = 'Sensors & Optics';
+                // Glass/transparent
+                else if (/glass|window|windshield|visor|lens|transparent/.test(name)) category = 'Glass';
+                // Rubber/seal
+                else if (/rubber|seal|gasket|o-ring|bumper|pad/.test(name)) category = 'Rubber & Seals';
+
+                if (!subgroups[category]) subgroups[category] = [];
+                subgroups[category].push(p);
+            });
+
+            Object.entries(subgroups).forEach(([catName, catParts]) => {
+                if (catParts.length <= 5) {
+                    // Small subgroup — keep individual
+                    result.push(...catParts);
+                } else {
+                    // Create a grouped entry
+                    result.push({
+                        id: `group_${gName}_${catName}`.toLowerCase().replace(/\s+/g, '_'),
+                        name: `${catName} (${catParts.length})`,
+                        desc: `${catParts.length} parts: ${catParts.slice(0, 5).map(p => p.name).join(', ')}${catParts.length > 5 ? '...' : ''}`,
+                        color: catParts[0].color,
+                        group: gName,
+                        subParts: catParts,
+                        expandable: true,
+                    });
+                }
+            });
         });
+
         return result;
     }
 

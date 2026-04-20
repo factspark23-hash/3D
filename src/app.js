@@ -269,7 +269,6 @@
     // THREE.JS SCENE
     // ═══════════════════════════════════════════════════════════
     let scene, camera, renderer, particles, gridLines, clock;
-    let partScene, partCamera, partRenderer, partMesh;
     let uploadScene, uploadCamera, uploadRenderer, uploadModel;
 
     function initThree() {
@@ -355,71 +354,6 @@
 
         gridLines.material.opacity = 0.06 + Math.sin(t*0.5)*0.02;
         renderer.render(scene, camera);
-    }
-
-    // Part detail mini-renderer
-    function initPartRenderer() {
-        const canvas = document.getElementById('part-detail-canvas');
-        if (!canvas) return;
-        try {
-            partRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-        } catch (e) { return; }
-        partScene = new THREE.Scene();
-        partCamera = new THREE.PerspectiveCamera(50, canvas.clientWidth / Math.max(canvas.clientHeight, 1), 0.1, 100);
-        partCamera.position.set(3, 2, 3);
-        partCamera.lookAt(0, 0, 0);
-        partRenderer.setSize(canvas.clientWidth, Math.max(canvas.clientHeight, 200));
-        partRenderer.setClearColor(0x000000, 0);
-
-        partScene.add(new THREE.AmbientLight(0xffffff, 0.4));
-        const dl = new THREE.DirectionalLight(0xffffff, 1.0); dl.position.set(3,5,3); partScene.add(dl);
-        const dl2 = new THREE.DirectionalLight(0x00d4ff, 0.3); dl2.position.set(-3,2,-3); partScene.add(dl2);
-        const dl3 = new THREE.PointLight(0xff8800, 0.3, 10); dl3.position.set(0,-3,2); partScene.add(dl3);
-    }
-
-    function animatePart() {
-        if (!partRenderer) return;
-        requestAnimationFrame(animatePart);
-        if (partMesh) partMesh.rotation.y += 0.01;
-        partRenderer.render(partScene, partCamera);
-    }
-
-    function showPartInCenter(part) {
-        if (!partScene) initPartRenderer();
-        if (partMesh) { partScene.remove(partMesh); partMesh = null; }
-
-        // Build real geometry for this specific part
-        try {
-            partMesh = JarvisGeometries.buildPartMesh(part.id, part.color);
-        } catch (e) {
-            // Fallback
-            const geo = new THREE.IcosahedronGeometry(0.8, 1);
-            const mat = new THREE.MeshPhongMaterial({ color: part.color, emissive: part.color, emissiveIntensity: 0.2 });
-            partMesh = new THREE.Mesh(geo, mat);
-        }
-
-        // Center and scale the mesh
-        const box = new THREE.Box3().setFromObject(partMesh);
-        const size = box.getSize(new THREE.Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z);
-        if (maxDim > 0) {
-            partMesh.scale.setScalar(2 / maxDim);
-            const center = box.getCenter(new THREE.Vector3());
-            partMesh.position.sub(center.multiplyScalar(2 / maxDim));
-        }
-
-        partScene.add(partMesh);
-
-        document.getElementById('part-detail-name').textContent = part.name;
-        document.getElementById('part-detail-desc').textContent = part.desc;
-
-        // Add annotation UI
-        const detailInfo = document.getElementById('part-detail-info');
-        // Remove old annotation if exists
-        const oldAnn = detailInfo.querySelector('.annotation-wrapper');
-        if (oldAnn) oldAnn.remove();
-        // Add annotation for this part
-        JarvisSearch.createAnnotationUI(part.id, detailInfo);
     }
 
     // Upload preview renderer

@@ -631,6 +631,12 @@
         initGestureSection();
         initUploadSection();
         initAIChat();
+        initScreenshot();
+        initThemeEngine();
+        initCompareSection();
+        initMeasurement();
+        initShareExport();
+        initPWA();
 
         // Initialize sounds on first user interaction
         document.addEventListener('click', () => {
@@ -664,6 +670,8 @@
             room: () => { JarvisSounds.navigate(); showSection('room'); },
             gesture: () => { JarvisSounds.navigate(); showSection('gesture'); },
             upload: () => { JarvisSounds.navigate(); showSection('upload'); },
+            compare: () => { JarvisSounds.navigate(); showSection('compare'); },
+            screenshot: () => { takeScreenshot(); },
             back: () => {
                 if (state.selectedProject) {
                     state.selectedProject = null;
@@ -944,7 +952,16 @@
         });
         canvas.addEventListener('mouseup', () => { exploderDragging = false; });
         canvas.addEventListener('mouseleave', () => { exploderDragging = false; hideTooltip(); });
-        canvas.addEventListener('click', () => { if (exploderHovered) handlePartClick(exploderHovered); });
+        canvas.addEventListener('click', () => {
+            if (measureMode && exploderHovered) {
+                // Get intersection point for measurement
+                exploderRaycaster.setFromCamera(exploderMouse, exploderCamera);
+                const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
+                if (intersects.length > 0) handleMeasureClick(intersects[0]);
+                return;
+            }
+            if (exploderHovered) handlePartClick(exploderHovered);
+        });
         canvas.addEventListener('wheel', (e) => {
             e.preventDefault();
             exploderCamera.position.multiplyScalar(1 + e.deltaY * 0.002);
@@ -2171,6 +2188,424 @@
             }
         } catch (err) {
             addAIMessage('assistant', `Connection Error: ${err.message}. Make sure server.js is running.`);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SCREENSHOT SYSTEM
+    // ═══════════════════════════════════════════════════════════
+    function initScreenshot() {
+        document.getElementById('screenshot-btn').addEventListener('click', takeScreenshot);
+        document.getElementById('btn-screenshot-view').addEventListener('click', takeScreenshot);
+    }
+
+    function takeScreenshot() {
+        JarvisSounds.click();
+        const flash = document.getElementById('screenshot-flash');
+        flash.classList.add('flash');
+        setTimeout(() => flash.classList.remove('flash'), 200);
+
+        // Create a composite canvas
+        const exportCanvas = document.createElement('canvas');
+        const w = 1920, h = 1080;
+        exportCanvas.width = w;
+        exportCanvas.height = h;
+        const ctx = exportCanvas.getContext('2d');
+
+        // Background
+        ctx.fillStyle = '#0a0a12';
+        ctx.fillRect(0, 0, w, h);
+
+        // Capture the appropriate 3D canvas
+        let sourceCanvas = null;
+        if (state.selectedProject && !document.getElementById('exploder-view').classList.contains('hidden')) {
+            sourceCanvas = document.getElementById('part-detail-canvas');
+        } else {
+            sourceCanvas = document.getElementById('three-canvas');
+        }
+
+        if (sourceCanvas && sourceCanvas.width > 0) {
+            try {
+                ctx.drawImage(sourceCanvas, 0, 0, w, h);
+            } catch (e) {
+                // Canvas tainted or not ready
+            }
+        }
+
+        // Overlay text info
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, h - 60, w, 60);
+        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--primary').trim() || '#00d4ff';
+        ctx.font = '16px Orbitron, monospace';
+        ctx.fillText('JARVIS 3D', 20, h - 35);
+        ctx.fillStyle = '#888';
+        ctx.font = '12px Rajdhani, sans-serif';
+        const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+        const info = state.selectedProject ? `${state.selectedProject.name}${state.selectedPart ? ' → ' + state.selectedPart.name : ''}` : 'Project Grid';
+        ctx.fillText(`${info}  |  ${timestamp}`, 20, h - 15);
+
+        // Download
+        const link = document.createElement('a');
+        link.download = `jarvis3d-${Date.now()}.png`;
+        link.href = exportCanvas.toDataURL('image/png');
+        link.click();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // THEME ENGINE
+    // ═══════════════════════════════════════════════════════════
+    const THEME_COLORS = {
+        cyan:   { grid: 0x00d4ff, particle: 0x00d4ff, ambient: 0x00d4ff },
+        red:    { grid: 0xff3333, particle: 0xff3333, ambient: 0xff3333 },
+        green:  { grid: 0x00ff66, particle: 0x00ff66, ambient: 0x00ff66 },
+        gold:   { grid: 0xffaa00, particle: 0xffaa00, ambient: 0xffaa00 },
+        purple: { grid: 0xaa44ff, particle: 0xaa44ff, ambient: 0xaa44ff },
+        white:  { grid: 0xffffff, particle: 0xaaccff, ambient: 0xffffff },
+    };
+
+    function initThemeEngine() {
+        const btn = document.getElementById('theme-btn');
+        const selector = document.getElementById('theme-selector');
+
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selector.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!selector.contains(e.target) && e.target !== btn) {
+                selector.classList.add('hidden');
+            }
+        });
+
+        selector.querySelectorAll('.theme-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                const theme = opt.dataset.theme;
+                applyTheme(theme);
+                selector.classList.add('hidden');
+                JarvisSounds.success();
+            });
+        });
+
+        // Restore saved theme
+        const saved = localStorage.getItem('jarvis3d-theme');
+        if (saved && THEME_COLORS[saved]) applyTheme(saved);
+    }
+
+    function applyTheme(themeName) {
+        if (themeName === 'cyan') {
+            document.documentElement.removeAttribute('data-theme');
+        } else {
+            document.documentElement.setAttribute('data-theme', themeName);
+        }
+        localStorage.setItem('jarvis3d-theme', themeName);
+
+        // Update active indicator
+        document.querySelectorAll('.theme-option').forEach(o => o.classList.toggle('active', o.dataset.theme === themeName));
+
+        // Update Three.js colors
+        const colors = THEME_COLORS[themeName] || THEME_COLORS.cyan;
+        if (gridLines) gridLines.material.color.setHex(colors.grid);
+        if (particles) particles.material.color.setHex(colors.particle);
+        if (scene) {
+            scene.children.forEach(c => {
+                if (c.isAmbientLight) c.color.setHex(colors.ambient);
+            });
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // MEASUREMENT TOOL
+    // ═══════════════════════════════════════════════════════════
+    let measureMode = false;
+    let measurePoints = [];
+    let measureMarkers = [];
+    let measureInfoEl = null;
+
+    function initMeasurement() {
+        const btn = document.getElementById('btn-measure');
+        btn.addEventListener('click', () => {
+            measureMode = !measureMode;
+            btn.classList.toggle('active-measure', measureMode);
+            btn.textContent = measureMode ? '📏 Measuring' : '📏 Measure';
+
+            if (!measureMode) clearMeasurement();
+            else {
+                document.getElementById('exploder-hint').textContent = '📏 Click two points on the model to measure distance';
+            }
+        });
+    }
+
+    function handleMeasureClick(intersect) {
+        if (!measureMode || !intersect) return;
+
+        const point = intersect.point.clone();
+        measurePoints.push(point);
+
+        // Create visual marker
+        const canvas = document.getElementById('part-detail-canvas');
+        const rect = canvas.getBoundingClientRect();
+        const screenPos = point.clone().project(exploderCamera);
+        const x = (screenPos.x * 0.5 + 0.5) * rect.width + rect.left;
+        const y = (-screenPos.y * 0.5 + 0.5) * rect.height + rect.top;
+
+        const marker = document.createElement('div');
+        marker.className = 'measure-point';
+        marker.style.left = x + 'px';
+        marker.style.top = y + 'px';
+        marker.textContent = measurePoints.length;
+        marker.style.fontSize = '0';
+        document.body.appendChild(marker);
+        measureMarkers.push(marker);
+
+        if (measurePoints.length >= 2) {
+            const dist = measurePoints[0].distanceTo(measurePoints[1]);
+            showMeasureResult(dist);
+            measurePoints = [];
+        }
+    }
+
+    function showMeasureResult(distance) {
+        if (measureInfoEl) measureInfoEl.remove();
+        measureInfoEl = document.createElement('div');
+        measureInfoEl.id = 'measure-info';
+        measureInfoEl.textContent = `📏 Distance: ${distance.toFixed(3)} units`;
+        document.getElementById('exploder-center').appendChild(measureInfoEl);
+
+        // Auto-hide after 5 seconds
+        setTimeout(() => {
+            if (measureInfoEl) { measureInfoEl.remove(); measureInfoEl = null; }
+            clearMeasurement();
+        }, 5000);
+    }
+
+    function clearMeasurement() {
+        measurePoints = [];
+        measureMarkers.forEach(m => m.remove());
+        measureMarkers = [];
+        if (measureInfoEl) { measureInfoEl.remove(); measureInfoEl = null; }
+    }
+
+    // Hook into existing click handler
+    const origHandlePartClick = handlePartClick;
+
+    // ═══════════════════════════════════════════════════════════
+    // COMPARE MODE
+    // ═══════════════════════════════════════════════════════════
+    function initCompareSection() {
+        const leftSel = document.getElementById('compare-left');
+        const rightSel = document.getElementById('compare-right');
+        const runBtn = document.getElementById('compare-run');
+
+        // Populate dropdowns
+        function populateDropdowns() {
+            [leftSel, rightSel].forEach(sel => {
+                sel.innerHTML = '';
+                state.projects.forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.id;
+                    opt.textContent = `${p.icon} ${p.name}`;
+                    sel.appendChild(opt);
+                });
+            });
+            if (state.projects.length > 1) rightSel.selectedIndex = 1;
+        }
+
+        // Re-populate when section is shown
+        const observer = new MutationObserver(() => {
+            if (!document.getElementById('compare-section').classList.contains('hidden')) {
+                populateDropdowns();
+            }
+        });
+        observer.observe(document.getElementById('compare-section'), { attributes: true, attributeFilter: ['class'] });
+
+        runBtn.addEventListener('click', () => {
+            const leftProj = state.projects.find(p => p.id === leftSel.value);
+            const rightProj = state.projects.find(p => p.id === rightSel.value);
+            if (!leftProj || !rightProj || leftProj.id === rightProj.id) {
+                alert('Select two different projects');
+                return;
+            }
+            runComparison(leftProj, rightProj);
+            JarvisSounds.success();
+        });
+    }
+
+    function runComparison(a, b) {
+        document.getElementById('compare-result').classList.remove('hidden');
+
+        // Calculate stats
+        const statsA = analyzeProject(a);
+        const statsB = analyzeProject(b);
+
+        // Render cards
+        renderCompareCard('compare-card-left', a, statsA);
+        renderCompareCard('compare-card-right', b, statsB);
+
+        // Render comparison bars
+        renderCompareBars(statsA, statsB, a.name, b.name);
+    }
+
+    function analyzeProject(proj) {
+        const groups = {};
+        let totalParts = proj.parts.length;
+        let maxDepth = 0;
+
+        proj.parts.forEach(p => {
+            const g = p.group || 'Other';
+            groups[g] = (groups[g] || 0) + 1;
+            // Check for children (modelbuilder data)
+            const modelDef = window.JarvisModelBuilder?.PROJECT_MODELS[proj.id];
+            if (modelDef) {
+                const partDef = modelDef.parts.find(pd => pd.id === p.id);
+                if (partDef?.children) {
+                    totalParts += countChildren(partDef.children);
+                    maxDepth = Math.max(maxDepth, getDepth(partDef.children));
+                }
+            }
+        });
+
+        return { totalParts, groupCount: Object.keys(groups).length, groups, maxDepth };
+    }
+
+    function countChildren(children) {
+        let count = children.length;
+        children.forEach(c => { if (c.children) count += countChildren(c.children); });
+        return count;
+    }
+
+    function getDepth(children, d) {
+        d = d || 1;
+        let max = d;
+        children.forEach(c => { if (c.children) max = Math.max(max, getDepth(c.children, d + 1)); });
+        return max;
+    }
+
+    function renderCompareCard(elId, proj, stats) {
+        const el = document.getElementById(elId);
+        el.innerHTML = `
+            <h3>${proj.icon} ${proj.name}</h3>
+            <div class="stat-row"><span>Top-Level Parts</span><span>${proj.parts.length}</span></div>
+            <div class="stat-row"><span>Total Components</span><span>${stats.totalParts}</span></div>
+            <div class="stat-row"><span>Categories</span><span>${stats.groupCount}</span></div>
+            <div class="stat-row"><span>Max Drill Depth</span><span>${stats.maxDepth} levels</span></div>
+            <div class="stat-row"><span>Type</span><span>${proj.type === 'user' ? 'UPLOADED' : 'BUILT-IN'}</span></div>
+        `;
+    }
+
+    function renderCompareBars(statsA, statsB, nameA, nameB) {
+        const container = document.getElementById('compare-stats');
+        const metrics = [
+            { label: 'Parts', a: statsA.totalParts, b: statsB.totalParts },
+            { label: 'Categories', a: statsA.groupCount, b: statsB.groupCount },
+            { label: 'Depth', a: statsA.maxDepth, b: statsB.maxDepth },
+        ];
+
+        container.innerHTML = '<h4>COMPARISON</h4>';
+        metrics.forEach(m => {
+            const max = Math.max(m.a, m.b, 1);
+            const row = document.createElement('div');
+            row.className = 'compare-bar';
+            row.innerHTML = `
+                <span class="compare-bar-label">${m.a}</span>
+                <div class="compare-bar-track">
+                    <div class="compare-bar-fill left" style="width:${(m.a / max) * 100}%"></div>
+                </div>
+                <span style="font-size:10px;color:#888;width:60px;text-align:center;font-family:var(--font-display)">${m.label}</span>
+                <div class="compare-bar-track">
+                    <div class="compare-bar-fill right" style="width:${(m.b / max) * 100}%"></div>
+                </div>
+                <span class="compare-bar-label" style="text-align:left">${m.b}</span>
+            `;
+            container.appendChild(row);
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // SHARE LINK + ANNOTATION EXPORT
+    // ═══════════════════════════════════════════════════════════
+    function initShareExport() {
+        document.getElementById('exploder-share').addEventListener('click', copyShareLink);
+        document.getElementById('exploder-export-annotations').addEventListener('click', exportAnnotations);
+
+        // Restore state from URL hash on load
+        restoreFromHash();
+    }
+
+    function copyShareLink() {
+        if (!state.selectedProject) return;
+        const hash = btoa(JSON.stringify({
+            p: state.selectedProject.id,
+            part: state.selectedPart?.name || null,
+        }));
+        const url = window.location.origin + window.location.pathname + '#' + hash;
+
+        navigator.clipboard.writeText(url).then(() => {
+            document.getElementById('exploder-share').textContent = '✅ COPIED';
+            setTimeout(() => {
+                document.getElementById('exploder-share').textContent = '🔗 SHARE';
+            }, 2000);
+            JarvisSounds.success();
+        }).catch(() => {
+            // Fallback: show in prompt
+            prompt('Copy this link:', url);
+        });
+    }
+
+    function restoreFromHash() {
+        const hash = window.location.hash.slice(1);
+        if (!hash) return;
+        try {
+            const data = JSON.parse(atob(hash));
+            const proj = state.projects.find(p => p.id === data.p);
+            if (proj) {
+                setTimeout(() => {
+                    openExploder(proj);
+                    if (data.part) {
+                        setTimeout(() => {
+                            const mesh = exploderFlatParts.find(m => m.userData.partName === data.part);
+                            if (mesh) handlePartClick(mesh);
+                        }, 500);
+                    }
+                }, 1000);
+            }
+        } catch (e) {
+            // Invalid hash, ignore
+        }
+    }
+
+    async function exportAnnotations() {
+        const annotations = await db.getAll('annotations');
+        if (!annotations.length) {
+            alert('No annotations to export');
+            return;
+        }
+
+        // Build CSV
+        let csv = 'Part ID,Note,Created\n';
+        annotations.forEach(a => {
+            const date = new Date(a.created).toISOString();
+            const text = (a.text || '').replace(/"/g, '""');
+            csv += `"${a.id}","${text}","${date}"\n`;
+        });
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const link = document.createElement('a');
+        link.download = `jarvis3d-annotations-${Date.now()}.csv`;
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+        JarvisSounds.success();
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // PWA REGISTRATION
+    // ═══════════════════════════════════════════════════════════
+    function initPWA() {
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js').catch(err => {
+                console.warn('[PWA] Service worker registration failed:', err);
+            });
         }
     }
 

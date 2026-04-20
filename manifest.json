@@ -1,0 +1,16 @@
+{
+    "name": "JARVIS 3D — Holographic Interface",
+    "short_name": "JARVIS 3D",
+    "description": "3D interactive platform inspired by Iron Man's holographic table",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0a0a12",
+    "theme_color": "#00d4ff",
+    "icons": [
+        {
+            "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230a0a12'/><circle cx='50' cy='50' r='35' fill='none' stroke='%2300d4ff' stroke-width='3'/><circle cx='50' cy='50' r='20' fill='none' stroke='%2300d4ff' stroke-width='2'/><circle cx='50' cy='50' r='6' fill='%2300d4ff'/></svg>",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        }
+    ]
+}

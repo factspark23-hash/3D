@@ -8,6 +8,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JARVIS 3D — Holographic Interface</title>
     <link rel="stylesheet" href="src/style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0a0a12">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 </head>
@@ -42,6 +44,7 @@
             <button class="nav-item" data-section="room"><span class="nav-icon">🚪</span><span class="nav-label">ROOM</span></button>
             <button class="nav-item" data-section="gesture"><span class="nav-icon">🤌</span><span class="nav-label">GESTURE</span></button>
             <button class="nav-item" data-section="upload"><span class="nav-icon">📤</span><span class="nav-label">UPLOAD</span></button>
+            <button class="nav-item" data-section="compare"><span class="nav-icon">⚖️</span><span class="nav-label">COMPARE</span></button>
         </div>
 
         <!-- ─── Home: Project Grid (3×3) ─── -->
@@ -54,6 +57,8 @@
         <div id="exploder-view" class="section-view hidden">
             <div class="exploder-top-bar">
                 <button id="exploder-back" class="back-btn">← BACK TO PROJECTS</button>
+                <button id="exploder-share" class="back-btn" title="Copy share link">🔗 SHARE</button>
+                <button id="exploder-export-annotations" class="back-btn" title="Export annotations">📋 EXPORT</button>
                 <div id="exploder-breadcrumb" class="exploder-breadcrumb"></div>
             </div>
             <div class="exploder-title" id="exploder-project-name"></div>
@@ -65,6 +70,8 @@
                         <button id="btn-explode" class="exploder-ctrl-btn" title="Explode/Assemble">💥 Explode</button>
                         <button id="btn-reset-view" class="exploder-ctrl-btn" title="Reset View">🔄 Reset</button>
                         <button id="btn-xray" class="exploder-ctrl-btn" title="X-Ray Mode">👁️ X-Ray</button>
+                        <button id="btn-measure" class="exploder-ctrl-btn" title="Measure Mode">📏 Measure</button>
+                        <button id="btn-screenshot-view" class="exploder-ctrl-btn" title="Screenshot">📸</button>
                     </div>
                     <div id="exploder-hint" class="exploder-hint">🖱️ Click any part to explore · Drag to rotate</div>
                     <div id="part-detail-info">
@@ -237,11 +244,46 @@
             </div>
         </div>
 
-        <!-- Search + Sound Controls -->
+        <!-- Search + Sound + Screenshot + Theme Controls -->
         <div id="quick-controls">
+            <button id="screenshot-btn" title="Screenshot (P)">📸</button>
             <button id="search-btn" title="Search (Ctrl+K or /)">🔍</button>
+            <button id="theme-btn" title="Theme">🎨</button>
             <button id="sound-btn" title="Toggle Sound (M)">🔊</button>
         </div>
+
+        <!-- ─── Theme Selector (tiny overlay) ─── -->
+        <div id="theme-selector" class="hidden">
+            <div class="theme-option active" data-theme="cyan"><span class="theme-swatch" style="background:#00d4ff"></span>Cyan</div>
+            <div class="theme-option" data-theme="red"><span class="theme-swatch" style="background:#ff3333"></span>Red Alert</div>
+            <div class="theme-option" data-theme="green"><span class="theme-swatch" style="background:#00ff66"></span>Matrix</div>
+            <div class="theme-option" data-theme="gold"><span class="theme-swatch" style="background:#ffaa00"></span>Gold</div>
+            <div class="theme-option" data-theme="purple"><span class="theme-swatch" style="background:#aa44ff"></span>Nebula</div>
+            <div class="theme-option" data-theme="white"><span class="theme-swatch" style="background:#ffffff"></span>Arctic</div>
+        </div>
+
+        <!-- ─── Compare Mode ─── -->
+        <div id="compare-section" class="section-view hidden">
+            <div class="section-title">COMPARE PROJECTS</div>
+            <div class="compare-panel">
+                <div class="compare-selectors">
+                    <select id="compare-left"></select>
+                    <span class="compare-vs">VS</span>
+                    <select id="compare-right"></select>
+                </div>
+                <button id="compare-run" class="btn-primary">Compare</button>
+                <div id="compare-result" class="hidden">
+                    <div class="compare-cards">
+                        <div id="compare-card-left" class="compare-card"></div>
+                        <div id="compare-card-right" class="compare-card"></div>
+                    </div>
+                    <div id="compare-stats"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screenshot flash -->
+        <div id="screenshot-flash"></div>
 
         <!-- ─── Status HUD ─── -->
         <div id="status-hud">

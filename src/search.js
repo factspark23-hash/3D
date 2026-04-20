@@ -302,6 +302,12 @@
             if (e.key === '3' && shortcutHandlers.room) { shortcutHandlers.room(); return; }
             if (e.key === '4' && shortcutHandlers.gesture) { shortcutHandlers.gesture(); return; }
             if (e.key === '5' && shortcutHandlers.upload) { shortcutHandlers.upload(); return; }
+            if (e.key === '6' && shortcutHandlers.compare) { shortcutHandlers.compare(); return; }
+
+            // P = screenshot
+            if (e.key === 'p' || e.key === 'P') {
+                if (shortcutHandlers.screenshot) { shortcutHandlers.screenshot(); return; }
+            }
 
             // Escape = back/close
             if (e.key === 'Escape') {

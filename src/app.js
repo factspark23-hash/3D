@@ -455,63 +455,122 @@
         const video = document.getElementById('face-video');
 
         try {
+            // Step 1: Load models
             statusEl.textContent = 'Loading face models...';
             bar.style.width = '10%';
-            await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
-            await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
-            bar.style.width = '40%';
 
-            statusEl.textContent = 'Accessing camera...';
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 280, height: 280, facingMode: 'user' } });
-            video.srcObject = stream;
-            await new Promise(r => (video.onloadedmetadata = r));
-            video.play();
-            bar.style.width = '60%';
-
-            statusEl.textContent = 'Detecting face...';
-            let detection = null;
-            for (let i = 0; i < 20 && !detection; i++) {
-                detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
-                bar.style.width = (60 + i * 2) + '%';
-                await new Promise(r => setTimeout(r, 250));
+            try {
+                await faceapi.nets.tinyFaceDetector.loadFromUri('/models');
+                bar.style.width = '25%';
+                await faceapi.nets.faceLandmark68Net.loadFromUri('/models');
+                bar.style.width = '40%';
+            } catch (modelErr) {
+                console.error('Model load failed:', modelErr);
+                statusEl.textContent = 'Model load failed — guest mode';
+                bar.style.width = '100%';
+                setTimeout(transitionToMain, 1500);
+                return;
             }
 
+            // Step 2: Access camera
+            statusEl.textContent = 'Accessing camera...';
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 280, height: 280, facingMode: 'user' },
+                });
+            } catch (camErr) {
+                console.warn('Camera denied:', camErr);
+                statusEl.textContent = 'Camera denied — guest mode';
+                bar.style.width = '100%';
+                setTimeout(transitionToMain, 1500);
+                return;
+            }
+
+            video.srcObject = stream;
+            await new Promise((resolve, reject) => {
+                video.onloadedmetadata = resolve;
+                video.onerror = reject;
+                setTimeout(resolve, 3000); // timeout fallback
+            });
+            await video.play();
+            bar.style.width = '60%';
+
+            // Step 3: Detect face (try up to 40 times = 10 seconds)
+            statusEl.textContent = 'Scanning face — look at camera...';
+            let detection = null;
+            const maxAttempts = 40;
+
+            for (let i = 0; i < maxAttempts && !detection; i++) {
+                try {
+                    detection = await faceapi
+                        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.3 }))
+                        .withFaceLandmarks();
+                } catch (detectErr) {
+                    // Skip failed detection frames
+                }
+                bar.style.width = (60 + (i / maxAttempts) * 35) + '%';
+
+                if (!detection) {
+                    // Update status with dots animation
+                    const dots = '.'.repeat((i % 3) + 1);
+                    statusEl.textContent = `Scanning face${dots}`;
+                    await new Promise(r => setTimeout(r, 250));
+                }
+            }
+
+            // Step 4: Process result
             if (detection) {
-                statusEl.textContent = 'Generating identity...';
+                statusEl.textContent = 'Face detected — generating ID...';
                 bar.style.width = '95%';
+
                 const lm = detection.landmarks.positions;
                 const emb = lm.map(p => [p.x / 280, p.y / 280]).flat();
 
+                // Check returning user
                 const existing = await db.getAll('faces');
-                let userId = null, bestSim = 0;
-                for (const f of existing) {
-                    const sim = cosineSim(emb, f.embedding);
-                    if (sim > bestSim) { bestSim = sim; userId = f.id; }
+                let userId = null;
+                let bestSim = 0;
+
+                for (const face of existing) {
+                    const sim = cosineSim(emb, face.embedding);
+                    if (sim > bestSim) {
+                        bestSim = sim;
+                        userId = face.id;
+                    }
                 }
 
                 if (bestSim > 0.85) {
-                    statusEl.textContent = `Welcome back, ${userId.slice(0,8)}`;
+                    statusEl.textContent = `Welcome back, ${userId.slice(0, 8)}!`;
                     state.faceData = { id: userId, embedding: emb, returning: true };
+                    document.getElementById('hud-user').textContent = userId.slice(0, 8).toUpperCase();
                 } else {
                     userId = crypto.randomUUID();
                     await db.put('faces', { id: userId, embedding: emb, created: Date.now() });
-                    statusEl.textContent = `Identity registered: ${userId.slice(0,8)}`;
+                    statusEl.textContent = `Identity registered: ${userId.slice(0, 8)}`;
                     state.faceData = { id: userId, embedding: emb, returning: false };
+                    document.getElementById('hud-user').textContent = userId.slice(0, 8).toUpperCase();
                 }
-                document.getElementById('hud-user').textContent = userId.slice(0,8).toUpperCase();
+
                 bar.style.width = '100%';
+                // Play scan sound
+                if (window.JarvisSounds) JarvisSounds.scan();
             } else {
                 statusEl.textContent = 'No face detected — guest mode';
                 bar.style.width = '100%';
             }
 
+            // Step 5: Cleanup camera
             stream.getTracks().forEach(t => t.stop());
-            setTimeout(transitionToMain, 1200);
+
+            // Step 6: Transition
+            setTimeout(transitionToMain, 1500);
+
         } catch (err) {
-            console.warn('Face scan:', err);
-            statusEl.textContent = 'Camera unavailable — guest mode';
+            console.error('Face scan error:', err);
+            statusEl.textContent = 'Scan error — guest mode';
             bar.style.width = '100%';
-            setTimeout(transitionToMain, 1000);
+            setTimeout(transitionToMain, 1500);
         }
     }
 

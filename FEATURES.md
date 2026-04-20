@@ -28,6 +28,23 @@
 19. [Status HUD](#19-status-hud)
 20. [Data Storage & Privacy](#20-data-storage--privacy)
 21. [9 Built-in Projects](#21-9-built-in-projects)
+22. [Screenshot System](#22-screenshot-system)
+23. [Saved Views](#23-saved-views)
+24. [Favorites](#24-favorites)
+25. [Guided Tour](#25-guided-tour)
+26. [Assembly Animation Timeline](#26-assembly-animation-timeline)
+27. [Mobile Touch Gestures](#27-mobile-touch-gestures)
+28. [Achievements](#28-achievements)
+29. [Voice Commands](#29-voice-commands)
+30. [Stress Test Visualization](#30-stress-test-visualization)
+31. [Real-Time 3D State Sync](#31-real-time-3d-state-sync)
+32. [Theme Engine](#32-theme-engine)
+33. [PWA (Offline Support)](#33-pwa-offline-support)
+34. [Compare Mode](#34-compare-mode)
+35. [Annotation Export](#35-annotation-export)
+36. [Share Link](#36-share-link)
+37. [Plugin System](#37-plugin-system)
+38. [Measurement Tool](#38-measurement-tool)
 22. [Architecture](#22-architecture)
 
 ---
@@ -689,8 +706,382 @@ Next-generation main battle tank.
 python3 -m http.server 8080
 # or
 npx serve .
+# or (with AI API proxy)
+node server.js
 ```
 
 ---
 
-*317+ clickable components. 5 levels deep. Zero servers. Pure browser power.*
+## 22. Screenshot System
+
+**What:** Capture any 3D view as a PNG image.
+
+**How it works:**
+1. Press `P` key or click 📸 in quick controls or exploder toolbar
+2. Screen flashes white (visual feedback)
+3. Canvas is captured at 1920×1080
+4. Holographic footer added: project name + timestamp
+5. PNG auto-downloads as `jarvis3d-[timestamp].png`
+
+**Capture sources:**
+- In exploder view → captures `part-detail-canvas` (3D model)
+- In any other view → captures `three-canvas` (background scene)
+
+**UI Impact:** 1 button in quick-controls + 1 in exploder controls. Non-intrusive.
+
+---
+
+## 23. Saved Views
+
+**What:** Save and restore any exploder state with a name.
+
+**Saved data:**
+- Project ID + name
+- Selected part (if any)
+- Camera position (x, y, z)
+- Rotation (x, y)
+- Explode state (on/off)
+- X-ray state (on/off)
+
+**How to use:**
+1. In exploder view, set up your desired view (rotate, explode, select part, etc.)
+2. Click 💾 Save → enter a name
+3. Click 💾 in quick controls → panel shows all saved views
+4. Click any saved view → restores exact state
+
+**Storage:** IndexedDB (`savedViews` store). Persists across sessions.
+
+**Delete:** Hover over a saved view → ✕ button appears.
+
+---
+
+## 24. Favorites
+
+**What:** Star any part for quick access across projects.
+
+**How to use:**
+1. In exploder view, select any part
+2. Click ☆ Fav → becomes ★ Fav (yellow)
+3. Navigate to ⭐ Favorites section
+4. All favorited parts shown as clickable cards
+5. Click any card → opens that project, selects that part
+
+**Data stored per favorite:** Project ID, project name, project icon, part ID, part name, part description.
+
+**Storage:** IndexedDB (`favorites` store). Key format: `[projectId]::[partId]`.
+
+**Remove:** Click ✕ on a favorite card, or click ★ Fav again in exploder.
+
+---
+
+## 25. Guided Tour
+
+**What:** First-time user walkthrough with spotlight effect.
+
+**Steps:**
+1. Project Grid — "This is your Project Grid — 9 built-in models"
+2. Floating Navigation — "Drag it anywhere. Use it to switch sections"
+3. Search — "Press Ctrl+K to search projects, parts, and actions"
+4. AI Assistant — "Click the JARVIS bubble to chat with your AI"
+5. First Project Card — "Click this card to open the Part Exploder"
+
+**How it works:**
+- Auto-starts on first visit (after 2 second delay)
+- Overlay darkens screen, spotlight highlights target element
+- Tooltip positioned relative to target (left/right/bottom/center)
+- Step indicator shows "STEP X / 5"
+- Skip button → dismisses immediately
+- Done button on last step
+
+**Persistence:** Saves `tour-seen: true` in IndexedDB settings. Won't show again.
+
+---
+
+## 26. Assembly Animation Timeline
+
+**What:** Slider control for smooth explode/assemble interpolation.
+
+**How it works:**
+- Slider appears below exploder controls when a project is open
+- Left = EXPLODED (parts spread out)
+- Right = ASSEMBLED (parts in original position)
+- Drag slider → smooth transition between states
+- Updates `exploderExplodeProgress` in real-time
+
+**Technical:** Reuses the same `updateExplodePositions()` function as the explode button. Slider value (0-100) maps to progress (1.0-0.0).
+
+---
+
+## 27. Mobile Touch Gestures
+
+**What:** Touch-based 3D interaction for mobile devices.
+
+**Gestures:**
+| Gesture | Action |
+|---|---|
+| Single finger drag | Rotate model |
+| Pinch (two fingers) | Zoom in/out |
+| Two-finger rotate | Combined zoom + rotation |
+| Tap on part | Select part |
+| Tap on project card | Open project |
+
+**Technical:** Uses `touchstart`, `touchmove`, `touchend` events with `{ passive: false }` to prevent browser zoom. Touch events mapped to the same `exploderRotation` and `exploderCamera.position` as mouse controls.
+
+---
+
+## 28. Achievements
+
+**What:** Unlock badges as you explore the platform.
+
+**Achievement definitions:**
+| ID | Name | Description | Trigger |
+|---|---|---|---|
+| first_view | First Steps | Opened your first project | `openExploder()` called |
+| explorer | Explorer | Viewed all 9 built-in projects | `viewedProjects.size >= 9` |
+| deep_diver | Deep Diver | Drilled 5 levels deep | `exploderBreadcrumb.length >= 5` |
+| first_favorite | Bookworm | Favorited your first part | `toggleFavorite()` success |
+| collector | Collector | Favorited 10 parts | `favorites count >= 10` |
+| first_upload | Creator | Uploaded your first model | `addUploadedProject()` success |
+| voice_user | Talk to Me | Used voice commands | Voice button clicked |
+| tour_complete | Oriented | Completed the guided tour | Tour done/skipped |
+| theme_changer | Stylish | Changed the theme | Theme selected |
+| all_parts | Completionist | Inspected 90 unique parts | `viewedParts.size >= 90` |
+
+**Notification:** Slide-in toast at bottom-left. Green border. Shows 🏆 icon + title + description. Auto-dismisses after 3 seconds.
+
+**Storage:** IndexedDB (`achievements` store). Each entry: `{ id, unlockedAt }`.
+
+---
+
+## 29. Voice Commands
+
+**What:** Browser-based speech recognition for hands-free control.
+
+**Technology:** Web Speech API (`webkitSpeechRecognition` / `SpeechRecognition`). Works best in Chrome.
+
+**How to use:**
+1. Click 🎙️ in quick controls
+2. Button turns green + pulses
+3. Status bar appears: "Listening..."
+4. Speak a command
+5. Status shows recognized text
+6. Command executes automatically
+
+**Supported commands:**
+| Phrase | Action |
+|---|---|
+| "home" / "projects" | Navigate to project grid |
+| "api" / "settings" | Navigate to API section |
+| "room" / "collaborate" | Navigate to room section |
+| "upload" / "import" | Navigate to upload section |
+| "favorite" | Navigate to favorites section |
+| "explode" | Toggle explode view |
+| "assemble" / "put together" | Reassemble model |
+| "reset" | Reset camera and rotation |
+| "x-ray" / "wireframe" | Toggle X-ray mode |
+| "screenshot" / "capture" | Take screenshot |
+| "search" | Open search overlay |
+| "sound off" / "mute" | Mute sounds |
+| "sound on" / "unmute" | Unmute sounds |
+| "[project name]" | Open that project (e.g., "falcon", "drone") |
+| "[part name]" | Select that part (e.g., "engine", "hull") |
+
+**Fallback:** If browser doesn't support Web Speech API, button is grayed out with tooltip "Voice not supported in this browser".
+
+---
+
+## 30. Stress Test Visualization
+
+**What:** Simulated load distribution visualization as a heat map.
+
+**How it works:**
+1. In exploder view, click 🧪 Stress
+2. All parts recolored based on simulated stress:
+   - **Red** = high stress (lower position, outer edges)
+   - **Blue** = low stress (upper position, inner)
+   - Interpolated gradient between
+3. Original colors saved in `mesh.userData._stressOriginalColor`
+4. Click again to toggle off → original colors restored
+
+**Algorithm:** Stress = `(2 - y_position) * 0.3 + distance_from_center * 0.4 + random_noise * 0.2`, clamped to [0, 1].
+
+**UI Impact:** 1 toggle button in exploder controls. Active state: orange border + glow.
+
+---
+
+## 31. Real-Time 3D State Sync
+
+**What:** P2P synchronization of 3D view state between room peers.
+
+**How it works:**
+1. When a peer connects (after password auth), `startStateSync()` is called
+2. Every 200ms (5 updates/sec), current state is sent over WebRTC data channel:
+   ```javascript
+   { type: '3d_state', projectId, partName, rotation, exploded }
+   ```
+3. Receiving peer's `handleRemote3DState()` applies the state:
+   - If different project → opens that project
+   - Rotation → smoothly interpolated via `exploderRotTarget`
+   - Explode state → toggled if different
+
+**Stop:** `stopStateSync()` called when room is left.
+
+**Bandwidth:** ~200 bytes per update × 5/sec = ~1 KB/sec per peer.
+
+---
+
+## 32. Theme Engine
+
+**What:** 6 color themes that change CSS variables and Three.js scene colors.
+
+**Themes:**
+| Name | Primary | Accent | Vibe |
+|---|---|---|---|
+| Cyan (default) | #00d4ff | #ff6600 | Classic holographic |
+| Red Alert | #ff3333 | #ffaa00 | Danger mode |
+| Matrix | #00ff66 | #88ff00 | Green terminal |
+| Gold | #ffaa00 | #ff6600 | Luxury |
+| Nebula | #aa44ff | #ff44aa | Deep space |
+| Arctic | #ffffff | #6699ff | Clean white/blue |
+
+**How it works:**
+1. Click 🎨 in quick controls → tiny overlay appears below button
+2. Click a theme → `data-theme` attribute set on `<html>` element
+3. CSS `[data-theme="name"]` selectors override `:root` variables
+4. Three.js scene colors updated: grid lines, particles, ambient light
+5. Saved to `localStorage` → persists across sessions
+
+**CSS variables changed:** `--primary`, `--primary-dim`, `--secondary`, `--accent`, `--border`, `--surface`, `--glow`, `--glow-strong`, `--text`, `--text-dim`.
+
+---
+
+## 33. PWA (Offline Support)
+
+**What:** Installable progressive web app with offline capability.
+
+**Components:**
+- `manifest.json` — app name, icons, theme color, display mode
+- `sw.js` — service worker with caching strategy
+
+**Caching strategy:**
+- **Static assets** (HTML, CSS, JS): Cache-first, cached on install
+- **CDN assets** (Three.js, face-api.js, fonts): Stale-while-revalidate
+- **API calls** (`/api/*`): Network-only (not cached)
+
+**Install:** Chrome shows "Install" prompt after first visit. Click to install as desktop app.
+
+**Offline behavior:**
+- App loads and works fully offline after first visit
+- AI assistant needs internet (API calls)
+- P2P room needs internet (PeerJS signaling)
+- MediaPipe needs internet (model download on first use)
+
+---
+
+## 34. Compare Mode
+
+**What:** Side-by-side project comparison.
+
+**How to use:**
+1. Click ⚖️ COMPARE in nav (or press `6`)
+2. Select two projects from dropdowns
+3. Click Compare
+
+**Stats shown per project:**
+- Top-level parts count
+- Total components (with drill-down)
+- Categories count
+- Max drill depth
+- Type (built-in / uploaded)
+
+**Visual comparison bars:** Horizontal bars showing relative values for parts, categories, and depth. Left bar = first project (primary color), right bar = second project (accent color).
+
+---
+
+## 35. Annotation Export
+
+**What:** Export all annotations as a CSV file.
+
+**How to use:**
+1. In exploder view, click 📋 EXPORT
+2. CSV auto-downloads: `jarvis3d-annotations-[timestamp].csv`
+
+**CSV format:**
+```
+Part ID,Note,Created
+"falcon-engine","This is the main engine","2026-04-21T10:30:00.000Z"
+```
+
+---
+
+## 36. Share Link
+
+**What:** Generate a shareable URL that restores project + part state.
+
+**How to use:**
+1. In exploder view, click 🔗 SHARE
+2. URL copied to clipboard (with visual confirmation)
+3. Share the URL → recipient opens same project + part
+
+**Technical:** State encoded as Base64 in URL hash: `{ p: projectId, part: partName }`. On page load, `restoreFromHash()` reads the hash and navigates to the saved state.
+
+---
+
+## 37. Plugin System
+
+**What:** Extension API for developers to add custom functionality.
+
+**API:**
+```javascript
+// Register a plugin
+window.JarvisPlugins.register('myPlugin', {
+    // Called once on startup
+    onInit: (state, db) => {},
+    
+    // Called when user selects a part
+    onPartSelected: (partData) => {},
+    
+    // Called when a project is opened
+    onProjectOpened: (project) => {},
+    
+    // Called when navigation changes
+    onSectionChanged: (sectionName) => {},
+    
+    // Custom commands (callable via trigger)
+    commands: {
+        myAction: (args) => { /* ... */ }
+    }
+});
+
+// Read current app state
+const state = window.JarvisPlugins.getState();
+// Returns: { currentSection, selectedProject, selectedPart, projects }
+
+// Trigger a hook manually
+window.JarvisPlugins.trigger('partSelected', data);
+```
+
+**Available hooks:** `partSelected`, `projectOpened`, `sectionChanged`
+
+**Error handling:** Plugin errors are caught and logged — they won't crash the app.
+
+---
+
+## 38. Measurement Tool
+
+**What:** Measure distance between two points on a 3D model.
+
+**How to use:**
+1. In exploder view, click 📏 Measure
+2. Button turns green (active)
+3. Click first point on the model → green marker appears
+4. Click second point → distance displayed in center
+5. Auto-clears after 5 seconds
+
+**Distance:** Shown in model units (e.g., `📏 Distance: 0.847 units`).
+
+**Technical:** Uses Three.js Raycaster to get intersection points, then `point1.distanceTo(point2)`.
+
+---
+
+*317+ clickable components. 5 levels deep. 38 features. Zero servers. Pure browser power.*

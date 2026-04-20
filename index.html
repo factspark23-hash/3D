@@ -1,0 +1,240 @@
+<!-- ═══════════════════════════════════════════════════════════════
+     JARVIS 3D — Iron Man Holographic Interface (COMPLETE)
+     ═══════════════════════════════════════════════════════════════ -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS 3D — Holographic Interface</title>
+    <link rel="stylesheet" href="src/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- ═══ Loading / Face Scan Screen ═══ -->
+    <div id="loading-screen">
+        <div class="scan-container">
+            <div class="scan-ring"><div class="scan-ring-inner"></div></div>
+            <video id="face-video" autoplay muted playsinline></video>
+            <canvas id="face-canvas"></canvas>
+            <div class="scan-overlay">
+                <div class="scan-corners">
+                    <span class="corner tl"></span><span class="corner tr"></span>
+                    <span class="corner bl"></span><span class="corner br"></span>
+                </div>
+            </div>
+            <p id="scan-status">Initializing face scan...</p>
+            <div id="scan-progress"><div id="scan-progress-bar"></div></div>
+            <button id="skip-scan" class="skip-btn">Skip Scan</button>
+        </div>
+    </div>
+
+    <!-- ═══ Main Interface ═══ -->
+    <div id="main-interface" class="hidden">
+        <canvas id="three-canvas"></canvas>
+        <div class="scanlines"></div>
+
+        <!-- ─── Floating Navigation ─── -->
+        <div id="floating-nav">
+            <button class="nav-item active" data-section="home"><span class="nav-icon">🏠</span><span class="nav-label">HOME</span></button>
+            <button class="nav-item" data-section="api"><span class="nav-icon">🔌</span><span class="nav-label">API</span></button>
+            <button class="nav-item" data-section="room"><span class="nav-icon">🚪</span><span class="nav-label">ROOM</span></button>
+            <button class="nav-item" data-section="gesture"><span class="nav-icon">🤌</span><span class="nav-label">GESTURE</span></button>
+            <button class="nav-item" data-section="upload"><span class="nav-icon">📤</span><span class="nav-label">UPLOAD</span></button>
+        </div>
+
+        <!-- ─── Home: Project Grid (3×3) ─── -->
+        <div id="project-grid" class="section-view">
+            <div class="section-title">PROJECTS</div>
+            <div class="grid-container" id="grid-container"></div>
+        </div>
+
+        <!-- ─── Part Exploder View ─── -->
+        <div id="exploder-view" class="section-view hidden">
+            <button id="exploder-back" class="back-btn">← BACK TO PROJECTS</button>
+            <div class="exploder-title" id="exploder-project-name"></div>
+            <div id="exploder-parts-left" class="exploder-side left"></div>
+            <div id="exploder-center" class="exploder-center">
+                <canvas id="part-detail-canvas"></canvas>
+                <div id="part-detail-info">
+                    <h3 id="part-detail-name"></h3>
+                    <p id="part-detail-desc"></p>
+                </div>
+            </div>
+            <div id="exploder-parts-right" class="exploder-side right"></div>
+        </div>
+
+        <!-- ─── API Section ─── -->
+        <div id="api-section" class="section-view hidden">
+            <div class="section-title">API CONFIGURATION</div>
+            <div class="api-config-panel">
+                <div class="config-row">
+                    <label>Provider</label>
+                    <select id="cfg-provider">
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="gemini">Google Gemini</option>
+                    </select>
+                </div>
+                <div class="config-row">
+                    <label>API Key</label>
+                    <input type="password" id="cfg-api-key" placeholder="sk-...">
+                </div>
+                <div class="config-row">
+                    <label>Model (optional)</label>
+                    <input type="text" id="cfg-model" placeholder="Auto-select">
+                </div>
+                <button id="cfg-save" class="btn-primary">Connect</button>
+                <p class="config-note">⚠️ Key lives in RAM only. Close tab = key gone. Never stored.</p>
+                <div id="cfg-status" class="config-status"></div>
+            </div>
+        </div>
+
+        <!-- ─── Room Section ─── -->
+        <div id="room-section" class="section-view hidden">
+            <div class="section-title">COLLABORATION ROOM</div>
+            <div class="room-panel">
+                <div id="room-lobby">
+                    <div class="room-card">
+                        <h3>Create Room</h3>
+                        <input type="text" id="room-password-create" placeholder="Set room password">
+                        <button id="room-create" class="btn-primary">Create Room</button>
+                    </div>
+                    <div class="room-card">
+                        <h3>Join Room</h3>
+                        <input type="text" id="room-code-join" placeholder="Room code">
+                        <input type="text" id="room-password-join" placeholder="Room password">
+                        <button id="room-join" class="btn-primary">Join Room</button>
+                    </div>
+                </div>
+                <div id="room-active" class="hidden">
+                    <div class="room-info">
+                        <span>Room: <strong id="room-code-display"></strong></span>
+                        <span>Password: <strong id="room-pass-display"></strong></span>
+                        <button id="room-leave" class="btn-danger">Leave</button>
+                    </div>
+                    <div class="video-container">
+                        <div class="video-wrapper">
+                            <video id="local-video" autoplay muted playsinline></video>
+                            <span class="video-label">YOU</span>
+                        </div>
+                        <div class="video-wrapper">
+                            <video id="remote-video" autoplay playsinline></video>
+                            <span class="video-label">PEER</span>
+                        </div>
+                    </div>
+                    <div class="chat-container">
+                        <div id="room-messages"></div>
+                        <div class="room-chat-input">
+                            <input type="text" id="room-chat-text" placeholder="Type a message...">
+                            <button id="room-chat-send">↑</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── Gesture Section ─── -->
+        <div id="gesture-section" class="section-view hidden">
+            <div class="section-title">GESTURE CONTROLS</div>
+            <div class="gesture-panel">
+                <div class="gesture-video-area">
+                    <video id="gesture-video" autoplay muted playsinline></video>
+                    <canvas id="gesture-canvas"></canvas>
+                    <div id="gesture-status">Enable camera to start gesture detection</div>
+                    <button id="gesture-start" class="btn-primary">Enable Camera</button>
+                </div>
+                <div class="gesture-list">
+                    <h3>Custom Gestures</h3>
+                    <div id="gesture-items"></div>
+                    <button id="gesture-add" class="btn-secondary">+ Record New Gesture</button>
+                    <div id="gesture-record-panel" class="hidden">
+                        <p>Hold a gesture for 2 seconds to record</p>
+                        <input type="text" id="gesture-name" placeholder="Gesture name">
+                        <select id="gesture-action">
+                            <option value="navigate_home">Navigate: Home</option>
+                            <option value="navigate_api">Navigate: API</option>
+                            <option value="navigate_room">Navigate: Room</option>
+                            <option value="navigate_upload">Navigate: Upload</option>
+                            <option value="scroll_up">Scroll Up</option>
+                            <option value="scroll_down">Scroll Down</option>
+                            <option value="zoom_in">Zoom In</option>
+                            <option value="zoom_out">Zoom Out</option>
+                        </select>
+                        <button id="gesture-record-start" class="btn-primary">Start Recording</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── Upload Section ─── -->
+        <div id="upload-section" class="section-view hidden">
+            <div class="section-title">UPLOAD PROJECT</div>
+            <div class="upload-panel">
+                <div class="upload-dropzone" id="upload-dropzone">
+                    <div class="dropzone-icon">📦</div>
+                    <p>Drop .glb file here or click to browse</p>
+                    <input type="file" id="upload-input" accept=".glb,.gltf" hidden>
+                </div>
+                <div id="upload-preview" class="hidden">
+                    <canvas id="upload-canvas"></canvas>
+                    <div id="upload-info">
+                        <h3 id="upload-name"></h3>
+                        <p id="upload-parts-count"></p>
+                        <p id="upload-groups-count"></p>
+                        <div id="upload-parts-list"></div>
+                    </div>
+                    <button id="upload-add-to-home" class="btn-primary">Add to Projects</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── AI Chat Bubble ─── -->
+        <div id="ai-bubble" title="JARVIS Assistant">
+            <div class="ai-pulse"></div>
+            <span class="ai-icon">🤖</span>
+        </div>
+
+        <!-- ─── AI Chat Panel ─── -->
+        <div id="ai-panel" class="hidden">
+            <div class="ai-panel-header">
+                <span>JARVIS Assistant</span>
+                <button id="ai-close" class="close-btn">✕</button>
+            </div>
+            <div id="ai-messages"></div>
+            <div class="ai-input-area">
+                <div id="ai-key-input">
+                    <input type="password" id="api-key-field" placeholder="Enter your API key">
+                    <select id="api-provider">
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="gemini">Google Gemini</option>
+                    </select>
+                    <button id="api-key-submit">Connect</button>
+                    <p class="key-note">⚠️ Key stored in RAM only — never saved</p>
+                </div>
+                <div id="ai-chat-input" class="hidden">
+                    <input type="text" id="ai-input" placeholder="Ask JARVIS anything...">
+                    <button id="ai-send">↑</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ─── Status HUD ─── -->
+        <div id="status-hud">
+            <div class="hud-item"><span class="hud-label">SYSTEM</span><span class="hud-value online" id="hud-status">ONLINE</span></div>
+            <div class="hud-item"><span class="hud-label">USER</span><span class="hud-value" id="hud-user">ANONYMOUS</span></div>
+            <div class="hud-item"><span class="hud-label">SECTION</span><span class="hud-value" id="hud-section">HOME</span></div>
+            <div class="hud-item"><span class="hud-label">ENGINE</span><span class="hud-value" id="hud-engine">READY</span></div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="src/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="src/ai-prompt.js"></script>
+    <script src="src/app.js"></script>
+</body>
+</html>

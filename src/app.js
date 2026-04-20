@@ -2024,12 +2024,12 @@
         const systemPrompt = window.AI_SYSTEM_PROMPT;
         const contextMsg = `CURRENT APP STATE:\n${JSON.stringify(context, null, 2)}`;
 
-        let url, headers, body;
+        let url, body;
 
         if (state.apiProvider === 'openai') {
-            url = 'https://api.openai.com/v1/chat/completions';
-            headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${state.apiKey}` };
+            url = '/api/openai';
             body = JSON.stringify({
+                _auth: { authorization: `Bearer ${state.apiKey}` },
                 model: 'gpt-4o-mini',
                 messages: [
                     { role: 'system', content: systemPrompt },
@@ -2039,32 +2039,37 @@
                 max_tokens: 500,
             });
         } else if (state.apiProvider === 'anthropic') {
-            url = 'https://api.anthropic.com/v1/messages';
-            headers = { 'Content-Type': 'application/json', 'x-api-key': state.apiKey, 'anthropic-version': '2023-06-01' };
+            url = '/api/anthropic';
             body = JSON.stringify({
+                _auth: { apiKey: state.apiKey, version: '2023-06-01' },
                 model: 'claude-3-5-haiku-20241022',
                 max_tokens: 500,
                 system: systemPrompt + '\n\n' + contextMsg,
                 messages: [{ role: 'user', content: userMessage }],
             });
         } else if (state.apiProvider === 'gemini') {
+            // Gemini supports CORS natively — call directly
             url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${state.apiKey}`;
-            headers = { 'Content-Type': 'application/json' };
             body = JSON.stringify({
                 contents: [{ parts: [{ text: systemPrompt + '\n\n' + contextMsg + '\n\nUser: ' + userMessage }] }],
             });
         }
 
         try {
+            const headers = { 'Content-Type': 'application/json' };
             const res = await fetch(url, { method: 'POST', headers, body });
             const data = await res.json();
             let reply;
             if (state.apiProvider === 'openai') reply = data.choices?.[0]?.message?.content;
             else if (state.apiProvider === 'anthropic') reply = data.content?.[0]?.text;
             else if (state.apiProvider === 'gemini') reply = data.candidates?.[0]?.content?.parts?.[0]?.text;
-            addAIMessage('assistant', reply || 'No response received');
+            if (!reply && data.error) {
+                addAIMessage('assistant', `API Error: ${data.error.message || data.error}`);
+            } else {
+                addAIMessage('assistant', reply || 'No response received');
+            }
         } catch (err) {
-            addAIMessage('assistant', `Error: ${err.message}`);
+            addAIMessage('assistant', `Connection Error: ${err.message}. Make sure server.js is running.`);
         }
     }
 

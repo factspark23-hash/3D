@@ -39,7 +39,7 @@
                 const req = indexedDB.open(this.name, this.version);
                 req.onupgradeneeded = (e) => {
                     const d = e.target.result;
-                    ['faces', 'projects', 'gestures', 'navPositions', 'settings'].forEach(s => {
+                    ['faces', 'projects', 'gestures', 'navPositions', 'settings', 'annotations'].forEach(s => {
                         if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' });
                     });
                 };
@@ -409,6 +409,14 @@
 
         document.getElementById('part-detail-name').textContent = part.name;
         document.getElementById('part-detail-desc').textContent = part.desc;
+
+        // Add annotation UI
+        const detailInfo = document.getElementById('part-detail-info');
+        // Remove old annotation if exists
+        const oldAnn = detailInfo.querySelector('.annotation-wrapper');
+        if (oldAnn) oldAnn.remove();
+        // Add annotation for this part
+        JarvisSearch.createAnnotationUI(part.id, detailInfo);
     }
 
     // Upload preview renderer
@@ -584,16 +592,69 @@
         initGestureSection();
         initUploadSection();
         initAIChat();
+
+        // Initialize sounds on first user interaction
+        document.addEventListener('click', () => {
+            JarvisSounds.init();
+            JarvisSounds.startAmbient();
+        }, { once: true });
+
+        // Initialize search
+        JarvisSearch.initSearch((type, data) => {
+            if (type === 'project') {
+                JarvisSounds.explode();
+                openExploder(data);
+            } else if (type === 'part') {
+                JarvisSounds.explode();
+                openExploder(data.project);
+                setTimeout(() => {
+                    state.selectedPart = data.part;
+                    renderExploderParts(data.project);
+                    showPartInCenter(data.part);
+                }, 100);
+            } else if (type === 'section') {
+                JarvisSounds.navigate();
+                showSection(data);
+            }
+        });
+
+        // Initialize keyboard shortcuts
+        JarvisSearch.initKeyboard({
+            home: () => { JarvisSounds.navigate(); showSection('home'); },
+            api: () => { JarvisSounds.navigate(); showSection('api'); },
+            room: () => { JarvisSounds.navigate(); showSection('room'); },
+            gesture: () => { JarvisSounds.navigate(); showSection('gesture'); },
+            upload: () => { JarvisSounds.navigate(); showSection('upload'); },
+            back: () => {
+                if (state.selectedProject) {
+                    state.selectedProject = null;
+                    state.selectedPart = null;
+                    showSection('home');
+                }
+            },
+        });
+
+        // Load annotations
+        JarvisSearch.loadAnnotations();
+
         showSection('home');
     }
+
+    // Expose projects for search
+    window._jarvisProjects = state.projects;
+    window._jarvisDB = db;
 
     function initNavButtons() {
         document.querySelectorAll('.nav-item').forEach(btn => {
             btn.addEventListener('click', () => {
                 const section = btn.dataset.section;
                 logAction('nav_click', section);
+                JarvisSounds.navigate();
                 showSection(section);
             });
+
+            // Hover sound
+            btn.addEventListener('mouseenter', () => JarvisSounds.hover());
         });
     }
 
@@ -627,8 +688,10 @@
             `;
             card.addEventListener('click', () => {
                 logAction('project_open', proj.name);
+                JarvisSounds.explode();
                 openExploder(proj);
             });
+            card.addEventListener('mouseenter', () => JarvisSounds.hover());
             container.appendChild(card);
 
             // Mini 3D preview
@@ -1467,6 +1530,18 @@
     document.getElementById('skip-scan').addEventListener('click', () => {
         document.getElementById('face-video').srcObject?.getTracks().forEach(t => t.stop());
         transitionToMain();
+    });
+
+    // Search button
+    document.getElementById('search-btn').addEventListener('click', () => {
+        JarvisSearch.openSearch();
+    });
+
+    // Sound toggle
+    document.getElementById('sound-btn').addEventListener('click', () => {
+        const enabled = JarvisSounds.toggle();
+        document.getElementById('sound-btn').textContent = enabled ? '🔊' : '🔇';
+        document.getElementById('sound-btn').classList.toggle('muted', !enabled);
     });
 
     async function init() {

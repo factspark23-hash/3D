@@ -858,6 +858,14 @@
     let exploderPrevMouse = { x: 0, y: 0 };
     let exploderRotation = { x: 0, y: 0 };
     let exploderBreadcrumb = [];
+    // Smooth animation targets
+    let exploderCamTarget = new THREE.Vector3(0, 2, 6);
+    let exploderRotTarget = { x: 0, y: 0 };
+    let exploderAutoRotateSpeed = 0.002;
+    let exploderExploded = false;
+    let exploderExplodeProgress = 0; // 0 = assembled, 1 = exploded
+    let exploderHoverScale = {}; // partId -> current scale
+    let exploderCameraShake = { x: 0, y: 0, intensity: 0 };
 
     function initExploder() {
         document.getElementById('exploder-back').addEventListener('click', () => {
@@ -875,6 +883,44 @@
                 showSection('home');
             }
         });
+
+        // Explode/Assemble button
+        document.getElementById('btn-explode').addEventListener('click', () => {
+            triggerExplodeToggle();
+            document.getElementById('btn-explode').textContent = exploderExploded ? '🔧 Assemble' : '💥 Explode';
+        });
+
+        // Reset view button
+        document.getElementById('btn-reset-view').addEventListener('click', () => {
+            exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 }; exploderExploded = false; exploderExplodeProgress = 0;
+            exploderCamTarget.set(0, 2, 6);
+            document.getElementById('btn-explode').textContent = '💥 Explode';
+            document.getElementById('exploder-hint').textContent = '🖱️ View reset!';
+            if (exploderBreadcrumb.length > 0) {
+                rebuildExploderModel(state.selectedProject);
+                exploderBreadcrumb = [];
+                updateBreadcrumbDisplay();
+            }
+        });
+
+        // X-Ray mode button
+        document.getElementById('btn-xray').addEventListener('click', () => {
+            const isXray = document.getElementById('btn-xray').classList.toggle('active');
+            exploderFlatParts.forEach(m => {
+                if (m.material) {
+                    if (isXray) {
+                        m.material.transparent = true;
+                        m.material.opacity = 0.25;
+                        m.material.wireframe = true;
+                    } else {
+                        m.material.transparent = m.userData.hasChildren;
+                        m.material.opacity = m.userData.hasChildren ? 0.92 : 1;
+                        m.material.wireframe = false;
+                    }
+                }
+            });
+            document.getElementById('exploder-hint').textContent = isXray ? '👁️ X-Ray: wireframe mode — click parts to inspect' : '🖱️ Normal mode';
+        });
     }
 
     function initExploderRenderer() {
@@ -886,7 +932,7 @@
 
         exploderScene = new THREE.Scene();
         exploderCamera = new THREE.PerspectiveCamera(50, canvas.clientWidth / Math.max(canvas.clientHeight, 300), 0.1, 100);
-        exploderCamera.position.set(0, 2, 6);
+        exploderCamTarget.set(0, 2, 6);
         exploderCamera.lookAt(0, 0, 0);
         exploderRenderer.setSize(canvas.clientWidth, Math.max(canvas.clientHeight, 300));
         exploderRenderer.setClearColor(0x0a0a12, 1);
@@ -965,11 +1011,15 @@
 
     function highlightMesh(mesh, isSelected) {
         if (!mesh.material) return;
-        mesh.material.emissiveIntensity = isSelected ? 0.4 : 0.2;
+        mesh.material.emissiveIntensity = isSelected ? 0.5 : 0.25;
+        // Scale up on hover
+        exploderHoverScale[mesh.userData.partId] = isSelected ? 1.08 : 1.04;
     }
     function resetMeshHighlight(mesh) {
         if (!mesh.material) return;
         mesh.material.emissiveIntensity = 0.05;
+        // Scale back to normal
+        exploderHoverScale[mesh.userData.partId] = 1;
     }
 
     function showTooltip(e, data) {
@@ -1039,7 +1089,7 @@
         if (exploderModel) exploderScene.remove(exploderModel);
         exploderModel = parentGroup;
         exploderScene.add(exploderModel);
-        exploderRotation = { x: 0, y: 0 };
+        exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 }; exploderExploded = false; exploderExplodeProgress = 0;
         showPartInfo({ partId: partDef.id, partName: partDef.name, partDesc: partDef.desc || '' });
         renderSidePanel(partId);
     }
@@ -1060,8 +1110,8 @@
         exploderModel = group;
         exploderFlatParts = flatParts;
         exploderScene.add(exploderModel);
-        exploderRotation = { x: 0, y: 0 };
-        exploderCamera.position.set(0, 2, 6);
+        exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 }; exploderExploded = false; exploderExplodeProgress = 0;
+        exploderCamTarget.set(0, 2, 6);
         exploderCamera.lookAt(0, 0, 0);
         renderSidePanel(null);
         document.getElementById('part-detail-name').textContent = proj.icon + ' ' + proj.name;
@@ -1073,10 +1123,105 @@
     function animateExploder() {
         exploderAnimId = requestAnimationFrame(animateExploder);
         if (!exploderRenderer || !exploderModel) return;
+
+        const dt = 0.06; // Lerp factor for smooth transitions
+
+        // Smooth rotation (lerp toward target)
+        exploderRotation.x += (exploderRotTarget.x - exploderRotation.x) * dt;
+        exploderRotation.y += (exploderRotTarget.y - exploderRotation.y) * dt;
+
         exploderModel.rotation.y = exploderRotation.y;
         exploderModel.rotation.x = exploderRotation.x;
-        if (!exploderDragging) exploderRotation.y += 0.002;
+
+        // Auto-rotate with easing (slower when recently dragged)
+        if (!exploderDragging) {
+            exploderRotTarget.y += exploderAutoRotateSpeed;
+        }
+
+        // Smooth camera position
+        exploderCamera.position.lerp(exploderCamTarget, dt * 0.5);
+
+        // Camera shake (for impact effects)
+        if (exploderCameraShake.intensity > 0.01) {
+            exploderCamera.position.x += (Math.random() - 0.5) * exploderCameraShake.intensity;
+            exploderCamera.position.y += (Math.random() - 0.5) * exploderCameraShake.intensity;
+            exploderCameraShake.intensity *= 0.9; // Decay
+        }
+
+        // Smooth explode/assemble animation
+        if (exploderExploded && exploderExplodeProgress < 1) {
+            exploderExplodeProgress = Math.min(1, exploderExplodeProgress + 0.02);
+            updateExplodePositions();
+        } else if (!exploderExploded && exploderExplodeProgress > 0) {
+            exploderExplodeProgress = Math.max(0, exploderExplodeProgress - 0.02);
+            updateExplodePositions();
+        }
+
+        // Hover scale animation
+        exploderFlatParts.forEach(m => {
+            const id = m.userData.partId;
+            const targetScale = exploderHoverScale[id] || 1;
+            const currentScale = m.scale.x;
+            if (Math.abs(currentScale - targetScale) > 0.001) {
+                const newScale = currentScale + (targetScale - currentScale) * 0.15;
+                m.scale.setScalar(newScale);
+            }
+        });
+
         exploderRenderer.render(exploderScene, exploderCamera);
+    }
+
+    function updateExplodePositions() {
+        if (!exploderModel) return;
+        const t = exploderExplodeProgress;
+        // Use easing for smooth animation
+        const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+
+        exploderModel.children.forEach(child => {
+            if (!child.userData._origPos) {
+                child.userData._origPos = child.position.clone();
+                // Calculate explode direction (away from center)
+                const dir = child.position.clone();
+                if (dir.length() < 0.01) {
+                    dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+                }
+                dir.normalize();
+                child.userData._explodeDir = dir;
+                child.userData._explodeDist = 1.2 + Math.random() * 0.8;
+            }
+
+            const orig = child.userData._origPos;
+            const dir = child.userData._explodeDir;
+            const dist = child.userData._explodeDist;
+
+            child.position.lerpVectors(
+                orig,
+                orig.clone().add(dir.clone().multiplyScalar(dist)),
+                ease
+            );
+        });
+    }
+
+    function triggerExplodeToggle() {
+        exploderExploded = !exploderExploded;
+        // Reset orig positions for new animation
+        if (exploderModel) {
+            exploderModel.children.forEach(child => {
+                if (exploderExploded) {
+                    // Save current position as origin before exploding
+                    child.userData._origPos = child.position.clone();
+                    const dir = child.position.clone();
+                    if (dir.length() < 0.01) dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+                    dir.normalize();
+                    child.userData._explodeDir = dir;
+                    child.userData._explodeDist = 1.2 + Math.random() * 0.8;
+                }
+            });
+        }
+        // Camera shake on explode
+        exploderCameraShake.intensity = 0.15;
+        JarvisSounds.explode();
+        document.getElementById('exploder-hint').textContent = exploderExploded ? '💥 Exploded! Drag to rotate · Click parts to inspect' : '🔧 Assembled!';
     }
 
     function openExploder(proj) {
@@ -1256,8 +1401,8 @@
 
             // ── OPEN PALM → RESET VIEW ──
             if (gestureType === 'open_palm' && now - gesture3DLastAction > GESTURE_3D_COOLDOWN) {
-                exploderRotation = { x: 0, y: 0 };
-                exploderCamera.position.set(0, 2, 6);
+                exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 }; exploderExploded = false; exploderExplodeProgress = 0;
+                exploderCamTarget.set(0, 2, 6);
                 exploderCamera.lookAt(0, 0, 0);
                 if (exploderBreadcrumb.length > 0) {
                     rebuildExploderModel(state.selectedProject);
@@ -1293,27 +1438,12 @@
                 gesture3DLastAction = now;
             }
 
-            // ── ROCK → EXPLODE VIEW (show all sub-parts at once) ──
+            // ── ROCK → EXPLODE VIEW (smooth animation) ──
             if (gestureType === 'rock' && now - gesture3DLastAction > GESTURE_3D_COOLDOWN) {
-                // Explode: separate parts along their group directions
                 if (exploderModel) {
-                    const isExploded = exploderModel.userData._exploded;
-                    exploderModel.children.forEach((child, i) => {
-                        if (isExploded) {
-                            // Restore positions
-                            child.position.copy(child.userData._origPos || child.position);
-                        } else {
-                            // Save and explode outward
-                            if (!child.userData._origPos) {
-                                child.userData._origPos = child.position.clone();
-                            }
-                            const dir = child.position.clone().normalize();
-                            if (dir.length() < 0.01) dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-                            child.position.copy(child.userData._origPos).add(dir.multiplyScalar(1.5));
-                        }
-                    });
-                    exploderModel.userData._exploded = !isExploded;
-                    document.getElementById('exploder-hint').textContent = isExploded ? '🤘 Assembled!' : '🤘 Exploded!';
+                    triggerExplodeToggle();
+                    const btn = document.getElementById('btn-explode');
+                    if (btn) btn.textContent = exploderExploded ? '🔧 Assemble' : '💥 Explode';
                 }
                 gesture3DLastAction = now;
             }
@@ -1589,24 +1719,15 @@
                 break;
             case 'reset_view':
                 if (exploderModel) {
-                    exploderRotation = { x: 0, y: 0 };
-                    exploderCamera.position.set(0, 2, 6);
+                    exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 }; exploderExploded = false; exploderExplodeProgress = 0;
+                    exploderCamTarget.set(0, 2, 6);
                 }
                 break;
             case 'explode_view':
                 if (exploderModel) {
-                    const isExploded = exploderModel.userData._exploded;
-                    exploderModel.children.forEach((child) => {
-                        if (isExploded) {
-                            child.position.copy(child.userData._origPos || child.position);
-                        } else {
-                            if (!child.userData._origPos) child.userData._origPos = child.position.clone();
-                            const dir = child.position.clone().normalize();
-                            if (dir.length() < 0.01) dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
-                            child.position.copy(child.userData._origPos).add(dir.multiplyScalar(1.5));
-                        }
-                    });
-                    exploderModel.userData._exploded = !isExploded;
+                    triggerExplodeToggle();
+                    const btn = document.getElementById('btn-explode');
+                    if (btn) btn.textContent = exploderExploded ? '🔧 Assemble' : '💥 Explode';
                 }
                 break;
         }

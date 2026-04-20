@@ -702,6 +702,7 @@
     // Expose projects for search
     window._jarvisProjects = state.projects;
     window._jarvisDB = db;
+    window.getDemoProjects = getDemoProjects;
 
     function initNavButtons() {
         document.querySelectorAll('.nav-item').forEach(btn => {
@@ -717,6 +718,12 @@
         });
     }
 
+    function stopAllCardAnimations() {
+        document.querySelectorAll('.card-canvas').forEach(canvas => {
+            if (canvas._stopAnim) canvas._stopAnim();
+        });
+    }
+
     function showSection(name) {
         state.currentSection = name;
         document.getElementById('hud-section').textContent = name.toUpperCase();
@@ -724,7 +731,14 @@
         document.querySelectorAll('.section-view').forEach(v => v.classList.add('hidden'));
         const el = document.getElementById(name === 'home' ? 'project-grid' : name + '-section');
         if (el) el.classList.remove('hidden');
-        if (name === 'home') document.getElementById('project-grid').classList.remove('hidden');
+        if (name === 'home') {
+            document.getElementById('project-grid').classList.remove('hidden');
+            // Restart card animations when returning home
+            state.projects.forEach((proj, i) => setTimeout(() => initCardPreview(proj), i * 50));
+        } else {
+            // Stop card animations when leaving home
+            stopAllCardAnimations();
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -744,13 +758,31 @@
                     <div class="card-meta">${proj.parts.length} parts · ${proj.desc}</div>
                 </div>
                 <span class="card-badge ${proj.type === 'user' ? 'user' : ''}">${proj.type === 'user' ? 'UPLOADED' : 'BUILT-IN'}</span>
+                ${proj.type === 'user' ? '<button class="card-delete" title="Delete project">✕</button>' : ''}
             `;
-            card.addEventListener('click', () => {
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.card-delete')) return; // Don't open exploder when clicking delete
                 logAction('project_open', proj.name);
                 JarvisSounds.explode();
                 openExploder(proj);
             });
             card.addEventListener('mouseenter', () => JarvisSounds.hover());
+
+            // Delete handler for uploaded projects
+            if (proj.type === 'user') {
+                const deleteBtn = card.querySelector('.card-delete');
+                deleteBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    if (confirm(`Delete "${proj.name}"? This cannot be undone.`)) {
+                        await db.del('projects', proj.id);
+                        state.projects = state.projects.filter(p => p.id !== proj.id);
+                        window._jarvisProjects = state.projects;
+                        renderProjectGrid();
+                        JarvisSounds.success();
+                    }
+                });
+            }
+
             container.appendChild(card);
 
             // Mini 3D preview
@@ -819,6 +851,9 @@
     function openExploder(proj) {
         state.selectedProject = proj;
         state.selectedPart = proj.parts[0] || null;
+
+        // Stop card preview animations
+        stopAllCardAnimations();
 
         document.querySelectorAll('.section-view').forEach(v => v.classList.add('hidden'));
         document.getElementById('exploder-view').classList.remove('hidden');
@@ -916,7 +951,12 @@
         // Add expand/collapse all button if there are expandable groups
         const hasExpandable = proj.parts.some(p => p.expandable);
         if (hasExpandable) {
+            // Remove old controls if they exist to prevent duplicates
+            const oldControls = leftEl.parentElement.querySelector('.exploder-group-controls');
+            if (oldControls) oldControls.remove();
+
             const controlsEl = document.createElement('div');
+            controlsEl.className = 'exploder-group-controls';
             controlsEl.style.cssText = 'width:100%;display:flex;gap:10px;justify-content:center;margin-top:10px;';
 
             const expandAll = document.createElement('button');
@@ -1111,7 +1151,7 @@
             await JarvisGestures.init(video, canvas, (gestureType, landmarks) => {
                 // Handle detected gesture
                 if (state.gestureRecording && landmarks) {
-                    JarvisGestures.captureFrame(landmarks);
+                    // Note: gesture engine already captures frames in processResults
                     state.gestureSamples.push(landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 })));
                     status.textContent = `Recording... ${state.gestureSamples.length} frames`;
 
@@ -1191,6 +1231,10 @@
         const name = document.getElementById('gesture-name').value.trim();
         const action = document.getElementById('gesture-action').value;
         if (!name) { alert('Enter gesture name'); return; }
+        if (!JarvisGestures.isRunning()) {
+            alert('Enable camera first before recording gestures');
+            return;
+        }
 
         state.gestureRecording = true;
         state.gestureSamples = [];

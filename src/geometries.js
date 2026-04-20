@@ -413,10 +413,9 @@
     }
 
     function mergeGroup(group) {
-        // Return the first child's geometry or a combined buffer
-        // For simplicity, merge all children into one geometry
-        const geometries = [];
+        // Merge all children into a single BufferGeometry
         group.updateMatrixWorld(true);
+        const geometries = [];
         group.traverse(child => {
             if (child.isMesh && child.geometry) {
                 const geo = child.geometry.clone();
@@ -428,14 +427,102 @@
         if (geometries.length === 0) return new THREE.BoxGeometry(0.1, 0.1, 0.1);
         if (geometries.length === 1) return geometries[0];
 
-        // Simple merge using BufferGeometryUtils if available, otherwise return first
-        try {
-            return THREE.BufferGeometryUtils
-                ? THREE.BufferGeometryUtils.mergeBufferGeometries(geometries)
-                : geometries[0];
-        } catch (e) {
-            return geometries[0];
+        // Manual merge: concatenate position, normal, uv attributes
+        let totalVerts = 0;
+        let totalIndices = 0;
+        let hasIndices = true;
+        const nonIndexed = [];
+
+        geometries.forEach(g => {
+            const pos = g.getAttribute('position');
+            if (g.index) {
+                totalIndices += g.index.count;
+            } else {
+                hasIndices = false;
+                nonIndexed.push(g);
+            }
+            totalVerts += pos.count;
+        });
+
+        // If any geometry is non-indexed, convert all to non-indexed and merge by vertices
+        if (!hasIndices || geometries.some(g => !g.index)) {
+            // Simple approach: create a new buffer geometry with concatenated positions
+            const mergedPositions = [];
+            const mergedNormals = [];
+            const mergedUvs = [];
+            const mergedIndices = [];
+            let vertOffset = 0;
+
+            geometries.forEach(g => {
+                const pos = g.getAttribute('position');
+                const norm = g.getAttribute('normal');
+                const uv = g.getAttribute('uv');
+
+                // Make indexed if not
+                let idx;
+                if (g.index) {
+                    idx = g.index.array;
+                } else {
+                    // Generate sequential indices for non-indexed geometry
+                    idx = new Uint32Array(pos.count);
+                    for (let i = 0; i < pos.count; i++) idx[i] = i;
+                }
+
+                for (let i = 0; i < pos.count; i++) {
+                    mergedPositions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+                    if (norm) mergedNormals.push(norm.getX(i), norm.getY(i), norm.getZ(i));
+                    else mergedNormals.push(0, 1, 0);
+                    if (uv) mergedUvs.push(uv.getX(i), uv.getY(i));
+                    else mergedUvs.push(0, 0);
+                }
+
+                for (let i = 0; i < idx.length; i++) {
+                    mergedIndices.push(idx[i] + vertOffset);
+                }
+                vertOffset += pos.count;
+            });
+
+            const merged = new THREE.BufferGeometry();
+            merged.setAttribute('position', new THREE.Float32BufferAttribute(mergedPositions, 3));
+            merged.setAttribute('normal', new THREE.Float32BufferAttribute(mergedNormals, 3));
+            merged.setAttribute('uv', new THREE.Float32BufferAttribute(mergedUvs, 2));
+            merged.setIndex(mergedIndices);
+            return merged;
         }
+
+        // All indexed: merge index + attribute arrays
+        const mergedPositions = [];
+        const mergedNormals = [];
+        const mergedUvs = [];
+        const mergedIndices = [];
+        let vertOffset = 0;
+
+        geometries.forEach(g => {
+            const pos = g.getAttribute('position');
+            const norm = g.getAttribute('normal');
+            const uv = g.getAttribute('uv');
+
+            for (let i = 0; i < pos.count; i++) {
+                mergedPositions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+                if (norm) mergedNormals.push(norm.getX(i), norm.getY(i), norm.getZ(i));
+                else mergedNormals.push(0, 1, 0);
+                if (uv) mergedUvs.push(uv.getX(i), uv.getY(i));
+                else mergedUvs.push(0, 0);
+            }
+
+            const idx = g.index.array;
+            for (let i = 0; i < idx.length; i++) {
+                mergedIndices.push(idx[i] + vertOffset);
+            }
+            vertOffset += pos.count;
+        });
+
+        const merged = new THREE.BufferGeometry();
+        merged.setAttribute('position', new THREE.Float32BufferAttribute(mergedPositions, 3));
+        merged.setAttribute('normal', new THREE.Float32BufferAttribute(mergedNormals, 3));
+        merged.setAttribute('uv', new THREE.Float32BufferAttribute(mergedUvs, 2));
+        merged.setIndex(mergedIndices);
+        return merged;
     }
 
     // ─── Build full project 3D model ───

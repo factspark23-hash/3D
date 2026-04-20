@@ -309,6 +309,12 @@
                     closeSearch();
                     return;
                 }
+                // Close AI panel if open
+                const aiPanel = document.getElementById('ai-panel');
+                if (aiPanel && !aiPanel.classList.contains('hidden')) {
+                    aiPanel.classList.add('hidden');
+                    return;
+                }
                 if (shortcutHandlers.back) shortcutHandlers.back();
                 return;
             }

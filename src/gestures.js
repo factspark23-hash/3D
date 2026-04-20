@@ -385,7 +385,6 @@
                     requestAnimationFrame(detect);
 
                     ctx.drawImage(video, 0, 0, 320, 240);
-                    const frame = ctx.drawImage(video, 0, 0, 320, 240);
 
                     // Simple motion detection
                     try {

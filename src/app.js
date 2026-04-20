@@ -996,7 +996,7 @@
             document.getElementById('cfg-status').className = 'config-status connected';
 
             // Sync to AI panel
-            document.getElementById('api-key-input').classList.add('hidden');
+            document.getElementById('ai-key-input').classList.add('hidden');
             document.getElementById('ai-chat-input').classList.remove('hidden');
             addAIMessage('assistant', `Connected via ${provider}. How can I help?`);
         });

@@ -325,7 +325,8 @@
 
         // Lights
         scene.add(new THREE.AmbientLight(0x00d4ff, 0.3));
-        const dl = new THREE.DirectionalLight(0xffffff, 0.5); dl.position.set(5,10,5); scene.add(dl);
+        const dl = new THREE.DirectionalLight(0xffffff, 0.6); dl.position.set(5,10,5); scene.add(dl);
+        const dl2 = new THREE.DirectionalLight(0xff8800, 0.15); dl2.position.set(-5,3,-5); scene.add(dl2);
 
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
@@ -370,8 +371,10 @@
         partRenderer.setSize(canvas.clientWidth, Math.max(canvas.clientHeight, 200));
         partRenderer.setClearColor(0x000000, 0);
 
-        partScene.add(new THREE.AmbientLight(0x00d4ff, 0.5));
-        const dl = new THREE.DirectionalLight(0xffffff, 0.8); dl.position.set(3,5,3); partScene.add(dl);
+        partScene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dl = new THREE.DirectionalLight(0xffffff, 1.0); dl.position.set(3,5,3); partScene.add(dl);
+        const dl2 = new THREE.DirectionalLight(0x00d4ff, 0.3); dl2.position.set(-3,2,-3); partScene.add(dl2);
+        const dl3 = new THREE.PointLight(0xff8800, 0.3, 10); dl3.position.set(0,-3,2); partScene.add(dl3);
     }
 
     function animatePart() {
@@ -435,8 +438,9 @@
         uploadRenderer.setSize(300, 300);
         uploadRenderer.setClearColor(0x000000, 0);
 
-        uploadScene.add(new THREE.AmbientLight(0xffffff, 0.4));
-        const dl = new THREE.DirectionalLight(0xffffff, 0.8); dl.position.set(5,10,5); uploadScene.add(dl);
+        uploadScene.add(new THREE.AmbientLight(0xffffff, 0.3));
+        const dl = new THREE.DirectionalLight(0xffffff, 1.0); dl.position.set(5,10,5); uploadScene.add(dl);
+        const dl2 = new THREE.DirectionalLight(0x00d4ff, 0.25); dl2.position.set(-5,3,-5); uploadScene.add(dl2);
     }
 
     function animateUpload() {
@@ -806,9 +810,10 @@
         miniRenderer.setSize(w, h);
         miniRenderer.setClearColor(0x000000, 0);
 
-        miniScene.add(new THREE.AmbientLight(0xffffff, 0.5));
-        const dl = new THREE.DirectionalLight(0xffffff, 0.7); dl.position.set(3,5,3); miniScene.add(dl);
+        miniScene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dl = new THREE.DirectionalLight(0xffffff, 0.9); dl.position.set(3,5,3); miniScene.add(dl);
         const dl2 = new THREE.DirectionalLight(0x00d4ff, 0.3); dl2.position.set(-3,2,-3); miniScene.add(dl2);
+        const dl3 = new THREE.DirectionalLight(0xff6600, 0.2); dl3.position.set(-2,1,4); miniScene.add(dl3);
 
         // Build real geometry model for this project
         let model;

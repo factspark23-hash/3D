@@ -1,95 +1,129 @@
 // ═══════════════════════════════════════════════════════════════
-// JARVIS 3D — MediaPipe Hands Gesture Engine
+// JARVIS 3D — MediaPipe Hands Gesture Engine (v2 - Fixed)
 // Real 21-landmark hand tracking + gesture recognition
 // ═══════════════════════════════════════════════════════════════
 (function () {
     'use strict';
 
-    let handsModel = null;
+    let handsInstance = null;
+    let cameraInstance = null;
     let cameraStream = null;
     let isRunning = false;
     let onGestureCallback = null;
     let lastGesture = null;
     let lastGestureTime = 0;
-    const GESTURE_COOLDOWN = 1000; // ms between gesture triggers
+    const GESTURE_COOLDOWN = 800;
+    let currentLandmarks = null;
+    let mediaPipeLoaded = false;
 
-    // ─── Load MediaPipe Hands via CDN ───
-    async function loadMediaPipe() {
+    // ─── Load MediaPipe scripts dynamically ───
+    function loadScript(src) {
         return new Promise((resolve, reject) => {
-            // Load hands solution
-            const script1 = document.createElement('script');
-            script1.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js';
-            script1.onload = () => {
-                // Load camera utils
-                const script2 = document.createElement('script');
-                script2.src = 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js';
-                script2.onload = resolve;
-                script2.onerror = reject;
-                document.head.appendChild(script2);
-            };
-            script1.onerror = reject;
-            document.head.appendChild(script1);
+            // Check if already loaded
+            const existing = document.querySelector(`script[src="${src}"]`);
+            if (existing) { resolve(); return; }
+            const script = document.createElement('script');
+            script.src = src;
+            script.crossOrigin = 'anonymous';
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`Failed to load: ${src}`));
+            document.head.appendChild(script);
         });
+    }
+
+    async function loadMediaPipe() {
+        if (mediaPipeLoaded) return;
+        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js');
+        await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js');
+        // Give scripts time to initialize
+        await new Promise(r => setTimeout(r, 200));
+        mediaPipeLoaded = true;
     }
 
     // ─── Initialize hand tracking ───
     async function init(videoElement, canvasElement, callback) {
+        if (isRunning) {
+            console.warn('Gesture engine already running');
+            return;
+        }
+
         onGestureCallback = callback;
 
+        // Step 1: Load MediaPipe
         try {
             await loadMediaPipe();
         } catch (e) {
-            console.warn('MediaPipe load failed, falling back to basic detection');
+            console.warn('MediaPipe CDN load failed:', e.message);
             return initBasic(videoElement, canvasElement, callback);
         }
 
+        // Step 2: Check if Hands constructor exists
         if (typeof Hands === 'undefined') {
-            console.warn('Hands not available, falling back');
+            console.warn('Hands constructor not available, using basic detection');
             return initBasic(videoElement, canvasElement, callback);
         }
 
-        const hands = new Hands({
-            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`,
-        });
-
-        hands.setOptions({
-            maxNumHands: 2,
-            modelComplexity: 1,
-            minDetectionConfidence: 0.7,
-            minTrackingConfidence: 0.5,
-        });
-
-        hands.onResults((results) => processResults(results, canvasElement));
-
-        handsModel = hands;
-
-        // Start camera
+        // Step 3: Get camera stream first
         try {
             cameraStream = await navigator.mediaDevices.getUserMedia({
                 video: { width: 640, height: 480, facingMode: 'user' },
             });
             videoElement.srcObject = cameraStream;
+            // Wait for video to be ready
+            await new Promise((resolve, reject) => {
+                videoElement.onloadedmetadata = resolve;
+                videoElement.onerror = reject;
+                setTimeout(reject, 5000);
+            });
             await videoElement.play();
-
-            isRunning = true;
-            detectLoop(videoElement);
         } catch (err) {
-            console.error('Camera error:', err);
-            throw err;
+            console.error('Camera access failed:', err);
+            throw new Error('Camera access denied or unavailable');
         }
-    }
 
-    // ─── Detection loop ───
-    async function detectLoop(video) {
-        if (!isRunning || !handsModel) return;
-
+        // Step 4: Initialize Hands
         try {
-            await handsModel.send({ image: video });
-        } catch (e) {
-            // Skip frame
+            handsInstance = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`;
+                },
+            });
+
+            handsInstance.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.5,
+            });
+
+            handsInstance.onResults((results) => {
+                processResults(results, canvasElement);
+            });
+        } catch (err) {
+            console.error('Hands init failed:', err);
+            return initBasic(videoElement, canvasElement, callback);
         }
 
-        requestAnimationFrame(() => detectLoop(video));
+        // Step 5: Start detection loop (manual, no Camera utility dependency)
+        isRunning = true;
+        canvasElement.width = videoElement.videoWidth || 640;
+        canvasElement.height = videoElement.videoHeight || 480;
+
+        let sending = false;
+        async function detectFrame() {
+            if (!isRunning || !handsInstance) return;
+            if (!sending && videoElement.readyState >= 2) {
+                sending = true;
+                try {
+                    await handsInstance.send({ image: videoElement });
+                } catch (e) {
+                    // Skip failed frames
+                }
+                sending = false;
+            }
+            requestAnimationFrame(detectFrame);
+        }
+        detectFrame();
     }
 
     // ─── Process hand landmarks ───
@@ -98,12 +132,20 @@
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+            currentLandmarks = null;
             return;
         }
 
         results.multiHandLandmarks.forEach((landmarks, handIndex) => {
-            // Draw landmarks on overlay canvas
+            currentLandmarks = landmarks;
+
+            // Draw hand skeleton overlay
             drawHand(ctx, landmarks, canvas.width, canvas.height);
+
+            // Capture frame if recording
+            if (recordingEnabled && landmarks) {
+                capturedFrames.push(landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 })));
+            }
 
             // Recognize gesture
             const gesture = recognizeGesture(landmarks);
@@ -113,163 +155,174 @@
                     lastGesture = gesture;
                     lastGestureTime = now;
                     if (onGestureCallback) onGestureCallback(gesture, landmarks);
-
-                    // Reset after cooldown
                     setTimeout(() => { lastGesture = null; }, GESTURE_COOLDOWN);
                 }
             }
         });
     }
 
-    // ─── Draw hand skeleton ───
+    // ─── Draw hand skeleton (21 landmarks, 20 connections) ───
+    const HAND_CONNECTIONS = [
+        [0,1],[1,2],[2,3],[3,4],        // thumb
+        [0,5],[5,6],[6,7],[7,8],        // index
+        [0,9],[9,10],[10,11],[11,12],   // middle
+        [0,13],[13,14],[14,15],[15,16], // ring
+        [0,17],[17,18],[18,19],[19,20], // pinky
+        [5,9],[9,13],[13,17],           // palm bridge
+    ];
+
     function drawHand(ctx, landmarks, w, h) {
-        const connections = [
-            [0,1],[1,2],[2,3],[3,4],       // thumb
-            [0,5],[5,6],[6,7],[7,8],       // index
-            [0,9],[9,10],[10,11],[11,12],  // middle
-            [0,13],[13,14],[14,15],[15,16],// ring
-            [0,17],[17,18],[18,19],[19,20],// pinky
-            [5,9],[9,13],[13,17],          // palm
-        ];
-
-        ctx.strokeStyle = 'rgba(0, 212, 255, 0.6)';
+        // Draw connections
+        ctx.strokeStyle = 'rgba(0, 212, 255, 0.7)';
         ctx.lineWidth = 2;
+        ctx.shadowColor = 'rgba(0, 212, 255, 0.5)';
+        ctx.shadowBlur = 4;
 
-        connections.forEach(([a, b]) => {
+        HAND_CONNECTIONS.forEach(([a, b]) => {
             ctx.beginPath();
             ctx.moveTo(landmarks[a].x * w, landmarks[a].y * h);
             ctx.lineTo(landmarks[b].x * w, landmarks[b].y * h);
             ctx.stroke();
         });
 
-        // Draw points
+        ctx.shadowBlur = 0;
+
+        // Draw landmark points
         landmarks.forEach((lm, i) => {
+            const x = lm.x * w;
+            const y = lm.y * h;
+            const isTip = [4, 8, 12, 16, 20].includes(i);
+            const isWrist = i === 0;
+
             ctx.beginPath();
-            ctx.arc(lm.x * w, lm.y * h, i === 0 ? 5 : 3, 0, Math.PI * 2);
-            ctx.fillStyle = i === 0 ? '#00ff88' : '#00d4ff';
+            ctx.arc(x, y, isWrist ? 6 : isTip ? 5 : 3, 0, Math.PI * 2);
+            ctx.fillStyle = isTip ? '#00ff88' : isWrist ? '#ff6600' : '#00d4ff';
             ctx.fill();
+
+            // Label fingertips
+            if (isTip) {
+                ctx.font = '10px Orbitron, monospace';
+                ctx.fillStyle = '#00ff88';
+                const labels = ['', '', '', '', 'T', '', '', '', 'I', '', '', '', 'M', '', '', '', 'R', '', '', '', 'P'];
+                ctx.fillText(labels[i] || '', x + 8, y - 4);
+            }
         });
     }
 
-    // ─── Gesture recognition (real landmark-based) ───
+    // ─── Gesture recognition using 21 landmarks ───
     function recognizeGesture(lm) {
-        // Finger states (extended or not)
-        const thumbExtended = lm[4].x < lm[3].x; // thumb tip left of IP (for right hand)
-        const indexExtended = lm[8].y < lm[6].y;
-        const middleExtended = lm[12].y < lm[10].y;
-        const ringExtended = lm[16].y < lm[14].y;
-        const pinkyExtended = lm[20].y < lm[18].y;
+        // Finger extension detection (y-axis: lower value = higher on screen)
+        // Thumb uses x-axis comparison (tip vs IP joint)
+        const thumbTip = lm[4];
+        const thumbIP = lm[3];
+        const thumbMCP = lm[2];
+        const indexTip = lm[8];
+        const indexPIP = lm[6];
+        const middleTip = lm[12];
+        const middlePIP = lm[10];
+        const ringTip = lm[16];
+        const ringPIP = lm[14];
+        const pinkyTip = lm[20];
+        const pinkyPIP = lm[18];
+        const wrist = lm[0];
+
+        const indexExtended = indexTip.y < indexPIP.y;
+        const middleExtended = middleTip.y < middlePIP.y;
+        const ringExtended = ringTip.y < ringPIP.y;
+        const pinkyExtended = pinkyTip.y < pinkyPIP.y;
+
+        // Thumb: compare distance from wrist
+        const thumbExtended = Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y) >
+                              Math.hypot(thumbIP.x - wrist.x, thumbIP.y - wrist.y);
 
         const extendedCount = [indexExtended, middleExtended, ringExtended, pinkyExtended].filter(Boolean).length;
 
-        // ── Fist (all fingers closed) ──
-        if (extendedCount === 0 && !thumbExtended) {
-            return 'fist';
-        }
+        // ── Fist (nothing extended) ──
+        if (extendedCount === 0 && !thumbExtended) return 'fist';
 
-        // ── Open palm (all fingers extended) ──
-        if (extendedCount === 4) {
-            return 'open_palm';
-        }
+        // ── Open palm (all 4 fingers extended) ──
+        if (extendedCount === 4) return 'open_palm';
 
-        // ── Point (only index extended) ──
-        if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
-            return 'point';
-        }
+        // ── Point (only index) ──
+        if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) return 'point';
 
-        // ── Peace / V sign (index + middle) ──
-        if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) {
-            return 'peace';
-        }
+        // ── Peace / Victory (index + middle) ──
+        if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) return 'peace';
 
-        // ── Thumbs up ──
-        if (thumbExtended && extendedCount === 0 && lm[4].y < lm[3].y) {
-            return 'thumbs_up';
-        }
+        // ── Three fingers ──
+        if (indexExtended && middleExtended && ringExtended && !pinkyExtended) return 'three';
 
-        // ── Pinch (thumb and index close together) ──
-        const pinchDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
-        if (pinchDist < 0.05) {
-            return 'pinch';
-        }
+        // ── Thumbs up (thumb extended, others closed, thumb above wrist) ──
+        if (thumbExtended && extendedCount === 0 && thumbTip.y < thumbMCP.y) return 'thumbs_up';
 
-        // ── Swipe detection (hand position changes) ──
-        const palmX = lm[0].x;
-        const palmY = lm[0].y;
-        if (palmX < 0.2) return 'swipe_left';
-        if (palmX > 0.8) return 'swipe_right';
-        if (palmY < 0.2) return 'swipe_up';
-        if (palmY > 0.8) return 'swipe_down';
+        // ── Thumbs down ──
+        if (thumbExtended && extendedCount === 0 && thumbTip.y > thumbMCP.y) return 'thumbs_down';
 
-        // ── Three fingers (spider-man) ──
-        if (indexExtended && middleExtended && pinkyExtended && !ringExtended) {
-            return 'three_fingers';
-        }
+        // ── Pinch (thumb tip close to index tip) ──
+        const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
+        if (pinchDist < 0.05) return 'pinch';
 
-        // ── OK sign (thumb and index form circle) ──
-        if (pinchDist < 0.06 && middleExtended && ringExtended && pinkyExtended) {
-            return 'ok_sign';
-        }
+        // ── OK sign (thumb+index circle, other fingers extended) ──
+        if (pinchDist < 0.07 && middleExtended && ringExtended && pinkyExtended) return 'ok_sign';
+
+        // ── Swipe detection (based on wrist position) ──
+        if (wrist.x < 0.15) return 'swipe_right';  // mirror
+        if (wrist.x > 0.85) return 'swipe_left';    // mirror
+        if (wrist.y < 0.15) return 'swipe_up';
+        if (wrist.y > 0.85) return 'swipe_down';
+
+        // ── Rock sign (index + pinky) ──
+        if (indexExtended && !middleExtended && !ringExtended && pinkyExtended) return 'rock';
 
         return null;
     }
 
-    // ─── Get current hand landmarks (for recording) ───
-    function getCurrentLandmarks() {
-        // This is called externally to get the current frame's landmarks
-        // The landmarks are passed through the callback
-        return null; // Real-time via callback
-    }
-
-    // ─── Record a gesture template ───
-    let recordingGesture = false;
-    let recordedFrames = [];
+    // ─── Recording support ───
+    let recordingEnabled = false;
+    let capturedFrames = [];
 
     function startRecording() {
-        recordingGesture = true;
-        recordedFrames = [];
-    }
-
-    function captureFrame(landmarks) {
-        if (!recordingGesture || !landmarks) return;
-        // Store normalized landmark positions
-        const frame = landmarks.map(lm => ({
-            x: lm.x,
-            y: lm.y,
-            z: lm.z || 0,
-        }));
-        recordedFrames.push(frame);
+        recordingEnabled = true;
+        capturedFrames = [];
     }
 
     function stopRecording() {
-        recordingGesture = false;
-        return recordedFrames;
+        recordingEnabled = false;
+        return [...capturedFrames];
     }
 
-    // ─── Compare gesture template ───
+    function captureFrame(landmarks) {
+        if (!recordingEnabled || !landmarks) return;
+        capturedFrames.push(landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 })));
+    }
+
+    // ─── Template comparison (DTW-inspired) ───
     function compareTemplates(templateA, templateB) {
-        if (!templateA.length || !templateB.length) return 0;
+        if (!templateA?.length || !templateB?.length) return 0;
 
-        // Average the frames to get a single 21-point template
-        const avgA = averageLandmarks(templateA);
-        const avgB = averageLandmarks(templateB);
+        // Average each template to a single 21-point frame
+        const avgA = averageFrame(templateA);
+        const avgB = averageFrame(templateB);
 
-        // Calculate average distance between corresponding landmarks
+        // Normalize both frames relative to wrist position
+        const normA = normalizeFrame(avgA);
+        const normB = normalizeFrame(avgB);
+
+        // Calculate average landmark distance
         let totalDist = 0;
         for (let i = 0; i < 21; i++) {
             totalDist += Math.hypot(
-                avgA[i].x - avgB[i].x,
-                avgA[i].y - avgB[i].y,
-                (avgA[i].z || 0) - (avgB[i].z || 0)
+                normA[i].x - normB[i].x,
+                normA[i].y - normB[i].y
             );
         }
-
         const avgDist = totalDist / 21;
-        // Convert to similarity (0-1, where 1 = identical)
-        return Math.max(0, 1 - avgDist * 10);
+
+        // Convert to similarity score (0-1)
+        return Math.max(0, Math.min(1, 1 - avgDist * 5));
     }
 
-    function averageLandmarks(frames) {
+    function averageFrame(frames) {
         const avg = [];
         for (let i = 0; i < 21; i++) {
             let x = 0, y = 0, z = 0;
@@ -278,28 +331,39 @@
                 y += f[i].y;
                 z += f[i].z || 0;
             });
-            avg.push({
-                x: x / frames.length,
-                y: y / frames.length,
-                z: z / frames.length,
-            });
+            const n = frames.length;
+            avg.push({ x: x / n, y: y / n, z: z / n });
         }
         return avg;
     }
 
-    // ─── Stop ───
+    function normalizeFrame(frame) {
+        // Normalize relative to wrist (landmark 0)
+        const wrist = frame[0];
+        return frame.map(lm => ({
+            x: lm.x - wrist.x,
+            y: lm.y - wrist.y,
+            z: lm.z - wrist.z,
+        }));
+    }
+
+    // ─── Stop everything ───
     function stop() {
         isRunning = false;
         if (cameraStream) {
             cameraStream.getTracks().forEach(t => t.stop());
             cameraStream = null;
         }
-        handsModel = null;
+        if (handsInstance) {
+            try { handsInstance.close(); } catch (e) {}
+            handsInstance = null;
+        }
+        currentLandmarks = null;
     }
 
-    // ─── Basic fallback (no MediaPipe) ───
+    // ─── Basic fallback (motion-based, no MediaPipe) ───
     function initBasic(video, canvas, callback) {
-        // Simplified motion-based detection as fallback
+        console.log('[Gestures] Using basic motion detection fallback');
         return new Promise(async (resolve) => {
             try {
                 cameraStream = await navigator.mediaDevices.getUserMedia({
@@ -311,67 +375,85 @@
                 const ctx = canvas.getContext('2d');
                 canvas.width = 320;
                 canvas.height = 240;
-                let prevFrame = null;
-
                 isRunning = true;
+
+                let prevFrame = null;
+                let motionHistory = [];
 
                 function detect() {
                     if (!isRunning) return;
                     requestAnimationFrame(detect);
 
                     ctx.drawImage(video, 0, 0, 320, 240);
-                    const frame = ctx.getImageData(0, 0, 320, 240);
+                    const frame = ctx.drawImage(video, 0, 0, 320, 240);
 
-                    if (prevFrame) {
-                        const motion = detectMotion(prevFrame, frame);
-                        if (motion && motion.type) {
-                            const now = Date.now();
-                            if (now - lastGestureTime > GESTURE_COOLDOWN) {
-                                lastGestureTime = now;
-                                if (onGestureCallback) onGestureCallback(motion.type, null);
+                    // Simple motion detection
+                    try {
+                        const imgData = ctx.getImageData(0, 0, 320, 240);
+                        if (prevFrame) {
+                            const motion = detectMotionRegions(prevFrame, imgData);
+                            if (motion) {
+                                motionHistory.push({ type: motion, time: Date.now() });
+                                // Keep last 10
+                                if (motionHistory.length > 10) motionHistory.shift();
+
+                                const now = Date.now();
+                                if (now - lastGestureTime > GESTURE_COOLDOWN) {
+                                    lastGestureTime = now;
+                                    if (callback) callback(motion, null);
+                                }
                             }
                         }
-                    }
-                    prevFrame = frame;
+                        prevFrame = imgData;
+                    } catch (e) {}
+
+                    // Draw guide box
+                    ctx.strokeStyle = 'rgba(0, 212, 255, 0.3)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(60, 40, 200, 160);
+                    ctx.font = '10px Orbitron, monospace';
+                    ctx.fillStyle = 'rgba(0, 212, 255, 0.5)';
+                    ctx.fillText('BASIC MODE', 100, 30);
                 }
                 detect();
                 resolve();
             } catch (e) {
-                console.error('Basic detection failed:', e);
+                console.error('Basic detection also failed:', e);
                 resolve();
             }
         });
     }
 
-    function detectMotion(prev, curr) {
-        let totalDiff = 0;
-        let leftDiff = 0, rightDiff = 0, topDiff = 0, bottomDiff = 0;
+    function detectMotionRegions(prev, curr) {
+        let left = 0, right = 0, top = 0, bottom = 0, total = 0;
         const w = prev.width, h = prev.height;
-        const halfW = w / 2, halfH = h / 2;
 
-        for (let i = 0; i < prev.data.length; i += 16) {
+        for (let i = 0; i < prev.data.length; i += 20) {
             const diff = Math.abs(prev.data[i] - curr.data[i]) +
                          Math.abs(prev.data[i+1] - curr.data[i+1]) +
                          Math.abs(prev.data[i+2] - curr.data[i+2]);
-            if (diff > 60) {
-                totalDiff++;
+            if (diff > 50) {
+                total++;
                 const px = (i / 4) % w;
                 const py = Math.floor((i / 4) / w);
-                if (px < halfW) leftDiff++;
-                else rightDiff++;
-                if (py < halfH) topDiff++;
-                else bottomDiff++;
+                if (px < w/2) left++; else right++;
+                if (py < h/2) top++; else bottom++;
             }
         }
 
-        if (totalDiff < 500) return null;
+        if (total < 300) return null;
 
-        if (leftDiff > rightDiff * 2) return { type: 'swipe_right' };
-        if (rightDiff > leftDiff * 2) return { type: 'swipe_left' };
-        if (topDiff > bottomDiff * 2) return { type: 'swipe_down' };
-        if (bottomDiff > topDiff * 2) return { type: 'swipe_up' };
+        if (left > right * 2.5) return 'swipe_right';
+        if (right > left * 2.5) return 'swipe_left';
+        if (top > bottom * 2.5) return 'swipe_down';
+        if (bottom > top * 2.5) return 'swipe_up';
 
-        return { type: 'open_palm' };
+        return 'wave';
+    }
+
+    // ─── Get current landmarks (for external use) ───
+    function getLandmarks() {
+        return currentLandmarks;
     }
 
     // Export
@@ -379,10 +461,11 @@
         init,
         stop,
         startRecording,
-        captureFrame,
         stopRecording,
+        captureFrame,
         compareTemplates,
         recognizeGesture,
+        getLandmarks,
         isRunning: () => isRunning,
     };
 })();

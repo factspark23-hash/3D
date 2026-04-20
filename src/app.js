@@ -671,10 +671,10 @@
                 JarvisSounds.explode();
                 openExploder(data.project);
                 setTimeout(() => {
-                    state.selectedPart = data.part;
-                    renderExploderParts(data.project);
-                    showPartInCenter(data.part);
-                }, 100);
+                    // Find and click the part in the new 3D interactive view
+                    const mesh = exploderFlatParts.find(m => m.userData.partId === data.part.id);
+                    if (mesh) handlePartClick(mesh);
+                }, 300);
             } else if (type === 'section') {
                 JarvisSounds.navigate();
                 showSection(data);
@@ -843,147 +843,328 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    // PART EXPLODER
+
     // ═══════════════════════════════════════════════════════════
+    // INTERACTIVE 3D PART EXPLODER
+    // ═══════════════════════════════════════════════════════════
+    let exploderRenderer, exploderScene, exploderCamera;
+    let exploderModel = null;
+    let exploderFlatParts = [];
+    let exploderRaycaster, exploderMouse;
+    let exploderHovered = null;
+    let exploderSelected = null;
+    let exploderAnimId = null;
+    let exploderDragging = false;
+    let exploderPrevMouse = { x: 0, y: 0 };
+    let exploderRotation = { x: 0, y: 0 };
+    let exploderBreadcrumb = [];
+
     function initExploder() {
         document.getElementById('exploder-back').addEventListener('click', () => {
-            state.selectedProject = null;
-            state.selectedPart = null;
-            showSection('home');
+            if (exploderBreadcrumb.length > 0) {
+                exploderBreadcrumb.pop();
+                const top = exploderBreadcrumb.length > 0 ? exploderBreadcrumb[exploderBreadcrumb.length - 1] : null;
+                if (top && top.id) {
+                    drillIntoPartById(top.id);
+                } else {
+                    rebuildExploderModel(state.selectedProject);
+                }
+            } else {
+                state.selectedProject = null;
+                state.selectedPart = null;
+                showSection('home');
+            }
         });
+    }
+
+    function initExploderRenderer() {
+        const canvas = document.getElementById('part-detail-canvas');
+        if (!canvas || exploderRenderer) return;
+        try {
+            exploderRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        } catch (e) { return; }
+
+        exploderScene = new THREE.Scene();
+        exploderCamera = new THREE.PerspectiveCamera(50, canvas.clientWidth / Math.max(canvas.clientHeight, 300), 0.1, 100);
+        exploderCamera.position.set(0, 2, 6);
+        exploderCamera.lookAt(0, 0, 0);
+        exploderRenderer.setSize(canvas.clientWidth, Math.max(canvas.clientHeight, 300));
+        exploderRenderer.setClearColor(0x0a0a12, 1);
+
+        exploderScene.add(new THREE.AmbientLight(0xffffff, 0.35));
+        const key = new THREE.DirectionalLight(0xffffff, 1.0); key.position.set(5, 8, 5); exploderScene.add(key);
+        const fill = new THREE.DirectionalLight(0x00d4ff, 0.3); fill.position.set(-5, 3, -5); exploderScene.add(fill);
+        const rim = new THREE.PointLight(0xff6600, 0.25, 15); rim.position.set(0, -5, 3); exploderScene.add(rim);
+
+        const gridGeo = new THREE.BufferGeometry();
+        const gv = [];
+        const s = 10, d = 20, st = s / d, h = s / 2;
+        for (let i = 0; i <= d; i++) { const p = -h + i * st; gv.push(-h, -2, p, h, -2, p, p, -2, -h, p, -2, h); }
+        gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(gv, 3));
+        exploderScene.add(new THREE.LineSegments(gridGeo, new THREE.LineBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.06 })));
+
+        exploderRaycaster = new THREE.Raycaster();
+        exploderMouse = new THREE.Vector2();
+
+        canvas.addEventListener('mousedown', (e) => { exploderDragging = true; exploderPrevMouse = { x: e.clientX, y: e.clientY }; });
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            exploderMouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            exploderMouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            if (exploderDragging) {
+                exploderRotation.y += (e.clientX - exploderPrevMouse.x) * 0.005;
+                exploderRotation.x += (e.clientY - exploderPrevMouse.y) * 0.005;
+                exploderRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, exploderRotation.x));
+                exploderPrevMouse = { x: e.clientX, y: e.clientY };
+            }
+            updateExploderHover(e);
+        });
+        canvas.addEventListener('mouseup', () => { exploderDragging = false; });
+        canvas.addEventListener('mouseleave', () => { exploderDragging = false; hideTooltip(); });
+        canvas.addEventListener('click', () => { if (exploderHovered) handlePartClick(exploderHovered); });
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            exploderCamera.position.multiplyScalar(1 + e.deltaY * 0.002);
+            const dist = exploderCamera.position.length();
+            if (dist < 2) exploderCamera.position.setLength(2);
+            if (dist > 15) exploderCamera.position.setLength(15);
+        }, { passive: false });
+
+        new ResizeObserver(() => {
+            const w = canvas.clientWidth, h = Math.max(canvas.clientHeight, 300);
+            exploderCamera.aspect = w / h;
+            exploderCamera.updateProjectionMatrix();
+            exploderRenderer.setSize(w, h);
+        }).observe(canvas);
+    }
+
+    function updateExploderHover(e) {
+        if (!exploderFlatParts.length) return;
+        exploderRaycaster.setFromCamera(exploderMouse, exploderCamera);
+        const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
+        if (exploderHovered && exploderHovered !== exploderSelected) resetMeshHighlight(exploderHovered);
+        if (intersects.length > 0) {
+            const mesh = intersects[0].object;
+            if (mesh.userData.partId) {
+                exploderHovered = mesh;
+                highlightMesh(mesh, false);
+                showTooltip(e, mesh.userData);
+                const hint = document.getElementById('exploder-hint');
+                hint.textContent = mesh.userData.hasChildren
+                    ? 'Click "' + mesh.userData.partName + '" to explore ' + mesh.userData.childCount + ' sub-parts'
+                    : mesh.userData.partName;
+                document.body.style.cursor = 'pointer';
+            }
+        } else {
+            exploderHovered = null;
+            document.getElementById('exploder-hint').textContent = 'Click any part to explore - Drag to rotate';
+            document.body.style.cursor = 'default';
+            hideTooltip();
+        }
+    }
+
+    function highlightMesh(mesh, isSelected) {
+        if (!mesh.material) return;
+        mesh.material.emissiveIntensity = isSelected ? 0.4 : 0.2;
+    }
+    function resetMeshHighlight(mesh) {
+        if (!mesh.material) return;
+        mesh.material.emissiveIntensity = 0.05;
+    }
+
+    function showTooltip(e, data) {
+        const tooltip = document.getElementById('part-tooltip');
+        tooltip.classList.remove('hidden');
+        const ci = data.hasChildren ? ' - ' + data.childCount + ' sub-parts' : '';
+        tooltip.innerHTML = '<strong>' + data.partName + '</strong>' + ci + '<br><span style="color:#888;font-size:11px">' + data.partDesc.slice(0, 80) + '</span>';
+        tooltip.style.left = (e.clientX + 15) + 'px';
+        tooltip.style.top = (e.clientY - 10) + 'px';
+    }
+    function hideTooltip() { document.getElementById('part-tooltip').classList.add('hidden'); }
+
+    function handlePartClick(mesh) {
+        const data = mesh.userData;
+        logAction('part_click', data.partName);
+        JarvisSounds.explode();
+        if (exploderSelected) resetMeshHighlight(exploderSelected);
+        if (data.hasChildren) {
+            exploderBreadcrumb.push({ mesh: mesh, id: data.partId, name: data.partName, desc: data.partDesc });
+            drillIntoPartById(data.partId);
+        } else {
+            exploderSelected = mesh;
+            highlightMesh(mesh, true);
+            showPartInfo(data);
+        }
+        updateBreadcrumbDisplay();
+    }
+
+    function drillIntoPartById(partId) {
+        const projId = state.selectedProject?.id;
+        const modelDef = window.JarvisModelBuilder?.PROJECT_MODELS[projId];
+        if (!modelDef) return;
+        const partDef = findPartDef(modelDef.parts, partId);
+        if (!partDef) return;
+
+        const parentGroup = new THREE.Group();
+        exploderFlatParts = [];
+
+        if (partDef.children) {
+            partDef.children.forEach(cd => {
+                if (!cd.build) return;
+                const geo = cd.build();
+                const color = cd.color || 0x00d4ff;
+                const mat = new THREE.MeshStandardMaterial({ color, metalness: 0.85, roughness: 0.25, emissive: color, emissiveIntensity: 0.05 });
+                const m = new THREE.Mesh(geo, mat);
+                if (cd.pos) m.position.set(cd.pos[0], cd.pos[1], cd.pos[2]);
+                if (cd.rot) m.rotation.set(cd.rot[0], cd.rot[1], cd.rot[2]);
+                m.userData = {
+                    partId: cd.id, partName: cd.name, partDesc: cd.desc || '', partGroup: cd.group || '',
+                    hasChildren: !!(cd.children && cd.children.length),
+                    childCount: cd.children ? cd.children.length : 0, originalColor: color,
+                };
+                parentGroup.add(m);
+                exploderFlatParts.push(m);
+            });
+        }
+
+        const box = new THREE.Box3().setFromObject(parentGroup);
+        const size = box.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        if (maxDim > 0) {
+            parentGroup.scale.setScalar(3 / maxDim);
+            const nb = new THREE.Box3().setFromObject(parentGroup);
+            parentGroup.position.sub(nb.getCenter(new THREE.Vector3()));
+        }
+
+        if (exploderModel) exploderScene.remove(exploderModel);
+        exploderModel = parentGroup;
+        exploderScene.add(exploderModel);
+        exploderRotation = { x: 0, y: 0 };
+        showPartInfo({ partId: partDef.id, partName: partDef.name, partDesc: partDef.desc || '' });
+        renderSidePanel(partId);
+    }
+
+    function findPartDef(parts, id) {
+        for (const p of parts) {
+            if (p.id === id) return p;
+            if (p.children) { const f = findPartDef(p.children, id); if (f) return f; }
+        }
+        return null;
+    }
+
+    function rebuildExploderModel(proj) {
+        if (!window.JarvisModelBuilder) return;
+        if (exploderModel) exploderScene.remove(exploderModel);
+        exploderHovered = null; exploderSelected = null;
+        const { group, flatParts } = window.JarvisModelBuilder.buildAssembledModel(proj.id);
+        exploderModel = group;
+        exploderFlatParts = flatParts;
+        exploderScene.add(exploderModel);
+        exploderRotation = { x: 0, y: 0 };
+        exploderCamera.position.set(0, 2, 6);
+        exploderCamera.lookAt(0, 0, 0);
+        renderSidePanel(null);
+        document.getElementById('part-detail-name').textContent = proj.icon + ' ' + proj.name;
+        document.getElementById('part-detail-desc').textContent = proj.desc;
+        if (exploderAnimId) cancelAnimationFrame(exploderAnimId);
+        animateExploder();
+    }
+
+    function animateExploder() {
+        exploderAnimId = requestAnimationFrame(animateExploder);
+        if (!exploderRenderer || !exploderModel) return;
+        exploderModel.rotation.y = exploderRotation.y;
+        exploderModel.rotation.x = exploderRotation.x;
+        if (!exploderDragging) exploderRotation.y += 0.002;
+        exploderRenderer.render(exploderScene, exploderCamera);
     }
 
     function openExploder(proj) {
         state.selectedProject = proj;
-        state.selectedPart = proj.parts[0] || null;
-
-        // Stop card preview animations
+        state.selectedPart = null;
+        exploderBreadcrumb = [];
         stopAllCardAnimations();
-
         document.querySelectorAll('.section-view').forEach(v => v.classList.add('hidden'));
         document.getElementById('exploder-view').classList.remove('hidden');
-        document.getElementById('exploder-project-name').textContent = `${proj.icon} ${proj.name}`;
-
-        renderExploderParts(proj);
-        if (state.selectedPart) showPartInCenter(state.selectedPart);
+        document.getElementById('exploder-project-name').textContent = proj.icon + ' ' + proj.name;
+        initExploderRenderer();
+        rebuildExploderModel(proj);
+        updateBreadcrumbDisplay();
     }
 
-    function renderExploderParts(proj) {
+    function showPartInfo(data) {
+        document.getElementById('part-detail-name').textContent = data.partName;
+        document.getElementById('part-detail-desc').textContent = data.partDesc;
+        const detailInfo = document.getElementById('part-detail-info');
+        const oldAnn = detailInfo.querySelector('.annotation-wrapper');
+        if (oldAnn) oldAnn.remove();
+        JarvisSearch.createAnnotationUI(data.partId, detailInfo);
+    }
+
+    function renderSidePanel(focusPartId) {
         const leftEl = document.getElementById('exploder-parts-left');
         const rightEl = document.getElementById('exploder-parts-right');
-        leftEl.innerHTML = '';
-        rightEl.innerHTML = '';
-
-        // Track expanded groups
-        if (!state._expandedGroups) state._expandedGroups = new Set();
-
-        // Group parts
+        leftEl.innerHTML = ''; rightEl.innerHTML = '';
+        if (!state.selectedProject) return;
+        const projId = state.selectedProject.id;
+        const modelDef = window.JarvisModelBuilder?.PROJECT_MODELS[projId];
+        if (!modelDef) return;
+        let partsToShow = modelDef.parts;
+        if (focusPartId) {
+            const pd = findPartDef(modelDef.parts, focusPartId);
+            if (pd && pd.children) partsToShow = pd.children;
+        }
         const groups = {};
-        proj.parts.forEach(p => {
-            const g = p.group || 'Other';
-            if (!groups[g]) groups[g] = [];
-            groups[g].push(p);
-        });
-
+        partsToShow.forEach(p => { const g = p.group || 'Other'; if (!groups[g]) groups[g] = []; groups[g].push(p); });
         const groupNames = Object.keys(groups);
         const half = Math.ceil(groupNames.length / 2);
-
         groupNames.forEach((gName, gi) => {
             const target = gi < half ? leftEl : rightEl;
             const groupEl = document.createElement('div');
             groupEl.className = 'part-group';
-
             const header = document.createElement('div');
             header.className = 'part-group-header';
             header.textContent = gName;
             groupEl.appendChild(header);
-
             groups[gName].forEach((part, pi) => {
-                // Check if this is an expandable group
-                if (part.expandable && part.subParts) {
-                    const isExpanded = state._expandedGroups.has(part.id);
-
-                    // Group header (clickable to expand)
-                    const groupIcon = document.createElement('div');
-                    groupIcon.className = 'part-icon' + (isExpanded ? ' selected' : '');
-                    groupIcon.innerHTML = `<span class="part-dot" style="background:#${part.color.toString(16).padStart(6,'0')}"></span><span class="part-label">${isExpanded ? '▼' : '▶'} ${part.name}</span>`;
-                    groupIcon.addEventListener('click', () => {
-                        if (isExpanded) {
-                            state._expandedGroups.delete(part.id);
-                        } else {
-                            state._expandedGroups.add(part.id);
-                        }
-                        renderExploderParts(proj);
-                    });
-                    groupEl.appendChild(groupIcon);
-
-                    // Show sub-parts if expanded
-                    if (isExpanded) {
-                        part.subParts.forEach((sub, si) => {
-                            const subIcon = document.createElement('div');
-                            subIcon.className = 'part-icon' + (state.selectedPart?.id === sub.id ? ' selected' : '');
-                            subIcon.style.paddingLeft = '24px';
-                            subIcon.style.animationDelay = (si * 0.03) + 's';
-                            subIcon.innerHTML = `<span class="part-dot" style="background:#${sub.color.toString(16).padStart(6,'0')};width:6px;height:6px"></span><span class="part-label" style="font-size:9px">${sub.name}</span>`;
-                            subIcon.addEventListener('click', () => {
-                                logAction('part_click', sub.name);
-                                state.selectedPart = sub;
-                                renderExploderParts(proj);
-                                showPartInCenter(sub);
-                            });
-                            groupEl.appendChild(subIcon);
-                        });
+                const hasChildren = part.children && part.children.length > 0;
+                const icon = document.createElement('div');
+                icon.className = 'part-icon';
+                icon.style.animationDelay = (pi * 0.05) + 's';
+                const colorHex = (part.color || 0x00d4ff).toString(16).padStart(6, '0');
+                icon.innerHTML = '<span class="part-dot" style="background:#' + colorHex + '"></span><span class="part-label">' + part.name + (hasChildren ? ' ▶' : '') + '</span>';
+                icon.addEventListener('click', () => {
+                    if (hasChildren) {
+                        exploderBreadcrumb.push({ id: part.id, name: part.name, desc: part.desc });
+                        drillIntoPartById(part.id);
+                    } else {
+                        showPartInfo({ partId: part.id, partName: part.name, partDesc: part.desc || '' });
                     }
-                } else {
-                    // Regular part
-                    const icon = document.createElement('div');
-                    icon.className = 'part-icon' + (state.selectedPart?.id === part.id ? ' selected' : '');
-                    icon.style.animationDelay = (pi * 0.05) + 's';
-                    icon.innerHTML = `<span class="part-dot" style="background:#${part.color.toString(16).padStart(6,'0')}"></span><span class="part-label">${part.name}</span>`;
-                    icon.addEventListener('click', () => {
-                        logAction('part_click', part.name);
-                        state.selectedPart = part;
-                        renderExploderParts(proj);
-                        showPartInCenter(part);
-                    });
-                    groupEl.appendChild(icon);
-                }
+                    logAction('part_click', part.name);
+                    JarvisSounds.hover();
+                });
+                icon.addEventListener('mouseenter', () => {
+                    const mesh = exploderFlatParts.find(m => m.userData.partId === part.id);
+                    if (mesh) highlightMesh(mesh, false);
+                    JarvisSounds.hover();
+                });
+                icon.addEventListener('mouseleave', () => {
+                    const mesh = exploderFlatParts.find(m => m.userData.partId === part.id);
+                    if (mesh && mesh !== exploderSelected) resetMeshHighlight(mesh);
+                });
+                groupEl.appendChild(icon);
             });
-
             target.appendChild(groupEl);
         });
+    }
 
-        // Add expand/collapse all button if there are expandable groups
-        const hasExpandable = proj.parts.some(p => p.expandable);
-        if (hasExpandable) {
-            // Remove old controls if they exist to prevent duplicates
-            const oldControls = leftEl.parentElement.querySelector('.exploder-group-controls');
-            if (oldControls) oldControls.remove();
-
-            const controlsEl = document.createElement('div');
-            controlsEl.className = 'exploder-group-controls';
-            controlsEl.style.cssText = 'width:100%;display:flex;gap:10px;justify-content:center;margin-top:10px;';
-
-            const expandAll = document.createElement('button');
-            expandAll.className = 'btn-secondary';
-            expandAll.textContent = 'Expand All';
-            expandAll.addEventListener('click', () => {
-                proj.parts.filter(p => p.expandable).forEach(p => state._expandedGroups.add(p.id));
-                renderExploderParts(proj);
-            });
-
-            const collapseAll = document.createElement('button');
-            collapseAll.className = 'btn-secondary';
-            collapseAll.textContent = 'Collapse All';
-            collapseAll.addEventListener('click', () => {
-                state._expandedGroups.clear();
-                renderExploderParts(proj);
-            });
-
-            controlsEl.appendChild(expandAll);
-            controlsEl.appendChild(collapseAll);
-            leftEl.parentElement.appendChild(controlsEl);
-        }
+    function updateBreadcrumbDisplay() {
+        const el = document.getElementById('exploder-breadcrumb');
+        if (!el) return;
+        if (exploderBreadcrumb.length === 0) { el.innerHTML = ''; return; }
+        el.innerHTML = '> ' + exploderBreadcrumb.map((b, i) =>
+            '<span class="crumb' + (i === exploderBreadcrumb.length - 1 ? ' active' : '') + '">' + b.name + '</span>'
+        ).join(' > ');
     }
 
     // ═══════════════════════════════════════════════════════════

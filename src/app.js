@@ -1168,6 +1168,161 @@
     }
 
     // ═══════════════════════════════════════════════════════════
+    // GESTURE → 3D EXPLODER INTEGRATION
+    // ═══════════════════════════════════════════════════════════
+    let gesture3DLastAction = 0;
+    let gesture3DPrevWrist = null;
+    const GESTURE_3D_COOLDOWN = 400;
+
+    function handleExploderGesture(gestureType, landmarks) {
+        // Only active when exploder is visible
+        if (state.currentSection !== 'home' || !exploderModel || !document.getElementById('exploder-view').classList.contains('hidden') === false) {
+            // Check if exploder is visible
+            if (document.getElementById('exploder-view').classList.contains('hidden')) return;
+        }
+
+        const now = Date.now();
+        const canvas = document.getElementById('part-detail-canvas');
+        if (!canvas) return;
+
+        if (landmarks) {
+            const wrist = landmarks[0];
+            const indexTip = landmarks[8];
+
+            // ── SWIPE → ROTATE MODEL ──
+            if (gesture3DPrevWrist && (gestureType === 'swipe_left' || gestureType === 'swipe_right' || gestureType === 'swipe_up' || gestureType === 'swipe_down')) {
+                const dx = wrist.x - gesture3DPrevWrist.x;
+                const dy = wrist.y - gesture3DPrevWrist.y;
+                if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+                    exploderRotation.y -= dx * 3;
+                    exploderRotation.x -= dy * 2;
+                    exploderRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, exploderRotation.x));
+                }
+            }
+            gesture3DPrevWrist = { x: wrist.x, y: wrist.y };
+
+            // ── POINT → HOVER/SELECT PART ──
+            if (gestureType === 'point' && !state.gestureRecording) {
+                // Map index finger to canvas coordinates
+                // landmarks are normalized 0-1, mirror x
+                const rect = canvas.getBoundingClientRect();
+                const screenX = rect.left + (1 - indexTip.x) * rect.width;
+                const screenY = rect.top + indexTip.y * rect.height;
+
+                exploderMouse.x = ((1 - indexTip.x) * 2 - 1);
+                exploderMouse.y = -(indexTip.y * 2 - 1);
+
+                // Raycast
+                exploderRaycaster.setFromCamera(exploderMouse, exploderCamera);
+                const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
+
+                if (intersects.length > 0) {
+                    const mesh = intersects[0].object;
+                    if (mesh.userData.partId) {
+                        // Highlight
+                        if (exploderHovered && exploderHovered !== exploderSelected) resetMeshHighlight(exploderHovered);
+                        exploderHovered = mesh;
+                        highlightMesh(mesh, false);
+
+                        // Show finger cursor indicator
+                        const hint = document.getElementById('exploder-hint');
+                        if (mesh.userData.hasChildren) {
+                            hint.textContent = '☝️ Pointing at: ' + mesh.userData.partName + ' — make a fist to drill down';
+                        } else {
+                            hint.textContent = '☝️ Pointing at: ' + mesh.userData.partName;
+                        }
+                    }
+                }
+            }
+
+            // ── FIST → CLICK/DRILL DOWN ──
+            if (gestureType === 'fist' && now - gesture3DLastAction > GESTURE_3D_COOLDOWN) {
+                if (exploderHovered && exploderHovered.userData.hasChildren) {
+                    handlePartClick(exploderHovered);
+                    gesture3DLastAction = now;
+                } else if (exploderBreadcrumb.length > 0) {
+                    // Go back up
+                    exploderBreadcrumb.pop();
+                    const top = exploderBreadcrumb.length > 0 ? exploderBreadcrumb[exploderBreadcrumb.length - 1] : null;
+                    if (top && top.id) {
+                        drillIntoPartById(top.id);
+                    } else {
+                        rebuildExploderModel(state.selectedProject);
+                    }
+                    updateBreadcrumbDisplay();
+                    gesture3DLastAction = now;
+                }
+            }
+
+            // ── OPEN PALM → RESET VIEW ──
+            if (gestureType === 'open_palm' && now - gesture3DLastAction > GESTURE_3D_COOLDOWN) {
+                exploderRotation = { x: 0, y: 0 };
+                exploderCamera.position.set(0, 2, 6);
+                exploderCamera.lookAt(0, 0, 0);
+                if (exploderBreadcrumb.length > 0) {
+                    rebuildExploderModel(state.selectedProject);
+                    exploderBreadcrumb = [];
+                    updateBreadcrumbDisplay();
+                }
+                document.getElementById('exploder-hint').textContent = '🖐️ View reset!';
+                gesture3DLastAction = now;
+            }
+
+            // ── PINCH → ZOOM IN ──
+            if (gestureType === 'pinch') {
+                exploderCamera.position.multiplyScalar(0.97);
+                if (exploderCamera.position.length() < 2) exploderCamera.position.setLength(2);
+            }
+
+            // ── THUMBS UP → ZOOM IN ──
+            if (gestureType === 'thumbs_up') {
+                exploderCamera.position.multiplyScalar(0.98);
+                if (exploderCamera.position.length() < 2) exploderCamera.position.setLength(2);
+            }
+
+            // ── THUMBS DOWN → ZOOM OUT ──
+            if (gestureType === 'thumbs_down') {
+                exploderCamera.position.multiplyScalar(1.02);
+                if (exploderCamera.position.length() > 15) exploderCamera.position.setLength(15);
+            }
+
+            // ── PEACE SIGN → AUTO-ROTATE TOGGLE ──
+            if (gestureType === 'peace' && now - gesture3DLastAction > GESTURE_3D_COOLDOWN) {
+                exploderDragging = !exploderDragging; // Toggle auto-rotate
+                document.getElementById('exploder-hint').textContent = exploderDragging ? '✌️ Auto-rotate paused' : '✌️ Auto-rotate resumed';
+                gesture3DLastAction = now;
+            }
+
+            // ── ROCK → EXPLODE VIEW (show all sub-parts at once) ──
+            if (gestureType === 'rock' && now - gesture3DLastAction > GESTURE_3D_COOLDOWN) {
+                // Explode: separate parts along their group directions
+                if (exploderModel) {
+                    const isExploded = exploderModel.userData._exploded;
+                    exploderModel.children.forEach((child, i) => {
+                        if (isExploded) {
+                            // Restore positions
+                            child.position.copy(child.userData._origPos || child.position);
+                        } else {
+                            // Save and explode outward
+                            if (!child.userData._origPos) {
+                                child.userData._origPos = child.position.clone();
+                            }
+                            const dir = child.position.clone().normalize();
+                            if (dir.length() < 0.01) dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+                            child.position.copy(child.userData._origPos).add(dir.multiplyScalar(1.5));
+                        }
+                    });
+                    exploderModel.userData._exploded = !isExploded;
+                    document.getElementById('exploder-hint').textContent = isExploded ? '🤘 Assembled!' : '🤘 Exploded!';
+                }
+                gesture3DLastAction = now;
+            }
+        } else {
+            gesture3DPrevWrist = null;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // API SECTION
     // ═══════════════════════════════════════════════════════════
     function initAPISection() {
@@ -1347,6 +1502,9 @@
                     return;
                 }
 
+                // ── 3D EXPLODER GESTURE CONTROL ──
+                handleExploderGesture(gestureType, landmarks);
+
                 // Check if gesture matches any saved gesture
                 const recognized = checkGestureMatch(gestureType, landmarks);
                 if (recognized) {
@@ -1407,8 +1565,50 @@
             case 'navigate_gesture': showSection('gesture'); break;
             case 'scroll_up': window.scrollBy(0, -200); break;
             case 'scroll_down': window.scrollBy(0, 200); break;
-            case 'zoom_in': document.body.style.zoom = (parseFloat(document.body.style.zoom || 1) + 0.1); break;
-            case 'zoom_out': document.body.style.zoom = Math.max(0.5, (parseFloat(document.body.style.zoom || 1) - 0.1)); break;
+            case 'zoom_in':
+                if (exploderModel && !document.getElementById('exploder-view').classList.contains('hidden')) {
+                    exploderCamera.position.multiplyScalar(0.85);
+                    if (exploderCamera.position.length() < 2) exploderCamera.position.setLength(2);
+                } else {
+                    document.body.style.zoom = (parseFloat(document.body.style.zoom || 1) + 0.1);
+                }
+                break;
+            case 'zoom_out':
+                if (exploderModel && !document.getElementById('exploder-view').classList.contains('hidden')) {
+                    exploderCamera.position.multiplyScalar(1.15);
+                    if (exploderCamera.position.length() > 15) exploderCamera.position.setLength(15);
+                } else {
+                    document.body.style.zoom = Math.max(0.5, (parseFloat(document.body.style.zoom || 1) - 0.1));
+                }
+                break;
+            case 'rotate_left':
+                if (exploderModel) exploderRotation.y -= 0.5;
+                break;
+            case 'rotate_right':
+                if (exploderModel) exploderRotation.y += 0.5;
+                break;
+            case 'reset_view':
+                if (exploderModel) {
+                    exploderRotation = { x: 0, y: 0 };
+                    exploderCamera.position.set(0, 2, 6);
+                }
+                break;
+            case 'explode_view':
+                if (exploderModel) {
+                    const isExploded = exploderModel.userData._exploded;
+                    exploderModel.children.forEach((child) => {
+                        if (isExploded) {
+                            child.position.copy(child.userData._origPos || child.position);
+                        } else {
+                            if (!child.userData._origPos) child.userData._origPos = child.position.clone();
+                            const dir = child.position.clone().normalize();
+                            if (dir.length() < 0.01) dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+                            child.position.copy(child.userData._origPos).add(dir.multiplyScalar(1.5));
+                        }
+                    });
+                    exploderModel.userData._exploded = !isExploded;
+                }
+                break;
         }
         logAction('gesture_trigger', action);
     }

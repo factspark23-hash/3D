@@ -340,13 +340,13 @@
         gridLines = new THREE.LineSegments(gridGeo, new THREE.LineBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.08 }));
         scene.add(gridLines);
 
-        // Particles
-        const pCount = 1200;
+        // Particles — reduced from 1200 to 400 for zero-lag feel
+        const pCount = 400;
         const pPos = new Float32Array(pCount * 3);
         const pVel = new Float32Array(pCount * 3);
         for (let i = 0; i < pCount; i++) {
-            pPos[i*3] = (Math.random()-0.5)*50; pPos[i*3+1] = Math.random()*25-2; pPos[i*3+2] = (Math.random()-0.5)*50;
-            pVel[i*3] = (Math.random()-0.5)*0.01; pVel[i*3+1] = Math.random()*0.02+0.005; pVel[i*3+2] = (Math.random()-0.5)*0.01;
+            pPos[i*3] = (Math.random()-0.5)*40; pPos[i*3+1] = Math.random()*20-2; pPos[i*3+2] = (Math.random()-0.5)*40;
+            pVel[i*3] = (Math.random()-0.5)*0.01; pVel[i*3+1] = Math.random()*0.015+0.005; pVel[i*3+2] = (Math.random()-0.5)*0.01;
         }
         const pGeo = new THREE.BufferGeometry();
         pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
@@ -354,8 +354,8 @@
         particles._vel = pVel;
         scene.add(particles);
 
-        // Rings
-        for (let i = 1; i <= 5; i++) {
+        // Rings — reduced from 5 to 3
+        for (let i = 1; i <= 3; i++) {
             const ring = new THREE.Mesh(
                 new THREE.RingGeometry(i*2-0.02, i*2+0.02, 64),
                 new THREE.MeshBasicMaterial({ color: 0x00d4ff, transparent: true, opacity: 0.06, side: THREE.DoubleSide, depthWrite: false })
@@ -376,25 +376,29 @@
         });
     }
 
+    let _frameCount = 0;
     function animate() {
         requestAnimationFrame(animate);
         if (!renderer) return;
+        _frameCount++;
         const t = clock.getElapsedTime();
 
-        // Particles
-        const pos = particles.geometry.attributes.position.array;
-        const vel = particles._vel;
-        for (let i = 0; i < pos.length; i += 3) {
-            pos[i] += vel[i]; pos[i+1] += vel[i+1]; pos[i+2] += vel[i+2];
-            if (pos[i+1] > 25) { pos[i+1] = -2; pos[i] = (Math.random()-0.5)*50; pos[i+2] = (Math.random()-0.5)*50; }
+        // Particles — update every 2 frames for performance
+        if (_frameCount % 2 === 0) {
+            const pos = particles.geometry.attributes.position.array;
+            const vel = particles._vel;
+            for (let i = 0; i < pos.length; i += 3) {
+                pos[i] += vel[i]; pos[i+1] += vel[i+1]; pos[i+2] += vel[i+2];
+                if (pos[i+1] > 25) { pos[i+1] = -2; pos[i] = (Math.random()-0.5)*50; pos[i+2] = (Math.random()-0.5)*50; }
+            }
+            particles.geometry.attributes.position.needsUpdate = true;
         }
-        particles.geometry.attributes.position.needsUpdate = true;
 
-        camera.position.x = Math.sin(t*0.1)*0.5;
-        camera.position.y = 8 + Math.sin(t*0.15)*0.3;
+        camera.position.x = Math.sin(t*0.08)*0.3;
+        camera.position.y = 8 + Math.sin(t*0.1)*0.2;
         camera.lookAt(0, 0, 0);
 
-        gridLines.material.opacity = 0.06 + Math.sin(t*0.5)*0.02;
+        gridLines.material.opacity = 0.06 + Math.sin(t*0.3)*0.015;
         renderer.render(scene, camera);
     }
 
@@ -434,21 +438,37 @@
         const bar = document.getElementById('scan-progress-bar');
         const video = document.getElementById('face-video');
 
+        // Hard timeout: if scan takes >4s, auto-transition
+        const scanTimeout = setTimeout(() => {
+            statusEl.textContent = 'Scan timeout — entering interface...';
+            bar.style.width = '100%';
+            video.srcObject?.getTracks().forEach(t => t.stop());
+            safeTransition();
+        }, 4000);
+
         try {
-            // Step 1: Load models
+            // Step 1: Load models (with timeout)
             statusEl.textContent = 'Loading face models...';
             bar.style.width = '10%';
 
+            let modelsLoaded = false;
             try {
-                await faceapi.nets.tinyFaceDetector.loadFromUri('./models');
-                bar.style.width = '25%';
-                await faceapi.nets.faceLandmark68Net.loadFromUri('./models');
-                bar.style.width = '40%';
+                await Promise.race([
+                    (async () => {
+                        await faceapi.nets.tinyFaceDetector.loadFromUri('./models');
+                        bar.style.width = '25%';
+                        await faceapi.nets.faceLandmark68Net.loadFromUri('./models');
+                        bar.style.width = '40%';
+                        modelsLoaded = true;
+                    })(),
+                    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2500))
+                ]);
             } catch (modelErr) {
                 console.error('Model load failed:', modelErr);
-                statusEl.textContent = 'Model load failed — guest mode';
+                statusEl.textContent = 'Models unavailable — guest mode';
                 bar.style.width = '100%';
-                setTimeout(transitionToMain, 1500);
+                clearTimeout(scanTimeout);
+                setTimeout(safeTransition, 800);
                 return;
             }
 
@@ -463,23 +483,23 @@
                 console.warn('Camera denied:', camErr);
                 statusEl.textContent = 'Camera denied — guest mode';
                 bar.style.width = '100%';
-                setTimeout(transitionToMain, 1500);
+                clearTimeout(scanTimeout);
+                setTimeout(safeTransition, 800);
                 return;
             }
 
             video.srcObject = stream;
-            await new Promise((resolve, reject) => {
+            await new Promise((resolve) => {
                 video.onloadedmetadata = resolve;
-                video.onerror = reject;
-                setTimeout(resolve, 3000); // timeout fallback
+                setTimeout(resolve, 2000); // timeout fallback
             });
             await video.play();
-            bar.style.width = '60%';
+            bar.style.width = '55%';
 
-            // Step 3: Detect face (try up to 40 times = 10 seconds)
+            // Step 3: Detect face (max 3 seconds)
             statusEl.textContent = 'Scanning face — look at camera...';
             let detection = null;
-            const maxAttempts = 40;
+            const maxAttempts = 12; // 12 * 250ms = 3 seconds max
 
             for (let i = 0; i < maxAttempts && !detection; i++) {
                 try {
@@ -489,10 +509,8 @@
                 } catch (detectErr) {
                     // Skip failed detection frames
                 }
-                bar.style.width = (60 + (i / maxAttempts) * 35) + '%';
-
+                bar.style.width = (55 + (i / maxAttempts) * 35) + '%';
                 if (!detection) {
-                    // Update status with dots animation
                     const dots = '.'.repeat((i % 3) + 1);
                     statusEl.textContent = `Scanning face${dots}`;
                     await new Promise(r => setTimeout(r, 250));
@@ -533,24 +551,23 @@
                 }
 
                 bar.style.width = '100%';
-                // Play scan sound
                 if (window.JarvisSounds) JarvisSounds.scan();
             } else {
                 statusEl.textContent = 'No face detected — guest mode';
                 bar.style.width = '100%';
             }
 
-            // Step 5: Cleanup camera
+            // Step 5: Cleanup and transition
             stream.getTracks().forEach(t => t.stop());
-
-            // Step 6: Transition
-            setTimeout(transitionToMain, 1500);
+            clearTimeout(scanTimeout);
+            setTimeout(safeTransition, 1200);
 
         } catch (err) {
             console.error('Face scan error:', err);
-            statusEl.textContent = 'Scan error — guest mode';
+            statusEl.textContent = 'Scan complete — entering...';
             bar.style.width = '100%';
-            setTimeout(transitionToMain, 1500);
+            clearTimeout(scanTimeout);
+            setTimeout(safeTransition, 800);
         }
     }
 
@@ -562,15 +579,23 @@
     }
 
     function transitionToMain() {
+        if (_hasTransitioned) return;
+        _hasTransitioned = true;
         const ls = document.getElementById('loading-screen');
         const mi = document.getElementById('main-interface');
-        ls.style.opacity = '0';
+        if (ls) {
+            ls.style.opacity = '0';
+            ls.style.transition = 'opacity 0.8s ease';
+        }
         setTimeout(() => {
-            ls.style.display = 'none';
-            mi.classList.remove('hidden');
-            mi.style.opacity = '1';
-            initAllSections();
-        }, 1000);
+            if (ls) ls.style.display = 'none';
+            if (mi) {
+                mi.classList.remove('hidden');
+                mi.style.opacity = '1';
+                mi.style.transition = 'opacity 0.8s ease';
+            }
+            try { initAllSections(); } catch(e) { console.warn('initAllSections error:', e); }
+        }, 800);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -2222,30 +2247,49 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    // SKIP SCAN + INIT
+    // INIT — Lightweight first, lazy-load heavy stuff
     // ═══════════════════════════════════════════════════════════
+    // HARD SAFETY NET: force transition after 5 seconds no matter what
+    let _hasTransitioned = false;
+    function safeTransition() {
+        if (_hasTransitioned) return;
+        _hasTransitioned = true;
+        transitionToMain();
+    }
+    setTimeout(safeTransition, 5000);
+
+    // Skip scan button — instant redirect
     document.getElementById('skip-scan').addEventListener('click', () => {
         document.getElementById('face-video').srcObject?.getTracks().forEach(t => t.stop());
-        transitionToMain();
+        safeTransition();
     });
 
-    // Search button
+    // Search button + Sound toggle
     document.getElementById('search-btn').addEventListener('click', () => {
-        JarvisSearch.openSearch();
+        if (window.JarvisSearch) JarvisSearch.openSearch();
     });
-
-    // Sound toggle
     document.getElementById('sound-btn').addEventListener('click', () => {
-        const enabled = JarvisSounds.toggle();
-        document.getElementById('sound-btn').textContent = enabled ? '🔊' : '🔇';
-        document.getElementById('sound-btn').classList.toggle('muted', !enabled);
+        if (window.JarvisSounds) {
+            const enabled = JarvisSounds.toggle();
+            document.getElementById('sound-btn').textContent = enabled ? '🔊' : '🔇';
+            document.getElementById('sound-btn').classList.toggle('muted', !enabled);
+        }
     });
 
     async function init() {
-        await db.open();
-        initThree();
-        animate();
+        // Open DB (non-blocking)
+        try { await db.open(); } catch(e) { console.warn('DB open failed:', e); }
+
+        // Start face scan immediately — no 3D yet
         initFaceScan();
+
+        // Lazy-load Three.js AFTER a small delay (non-blocking)
+        setTimeout(() => {
+            try {
+                initThree();
+                animate();
+            } catch(e) { console.warn('Three.js init failed:', e); }
+        }, 100);
     }
 
     init();

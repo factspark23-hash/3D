@@ -297,19 +297,19 @@
     // For brevity, other projects reuse the v2 modelbuilder structure
     // but inherit the same drill-down pattern
 
+
     function quickProject(id, name, icon, parts) {
-        PROJECT_MODELS[id] = { parts: parts.map(p => ({
-            id: p[0], name: p[1], desc: p[2], group: p[3],
-            build: () => G[p[4]] ? G[p[4]]() : new THREE.BoxGeometry(0.1,0.1,0.1),
-            pos: p[5] || [0,0,0], rot: p[6] || [0,0,0], color: p[7] || 0x00d4ff,
-            children: (p[8] || []).map(c => ({
-                id: c[0], name: c[1], desc: c[2], group: c[3] || p[3],
-                build: c[4] instanceof Function ? c[4] : (() => G[c[4]] ? G[c[4]]() : new THREE.BoxGeometry(0.05,0.05,0.05)),
-                pos: c[5] || [0,0,0], rot: c[6] || [0,0,0], color: c[7] || 0x00d4ff,
-                children: []
-            }))
-        }))};
+        function mapNode(n, parentGroup) {
+            return {
+                id: n[0], name: n[1], desc: n[2], group: n[3] || parentGroup,
+                build: n[4] instanceof Function ? n[4] : (() => G[n[4]] ? G[n[4]]() : new THREE.BoxGeometry(0.1, 0.1, 0.1)),
+                pos: n[5] || [0, 0, 0], rot: n[6] || [0, 0, 0], color: n[7] || 0x00d4ff,
+                children: (n[8] || []).map(c => mapNode(c, n[3] || parentGroup))
+            };
+        }
+        PROJECT_MODELS[id] = { parts: parts.map(p => mapNode(p, 'Other')) };
     }
+
 
     // ─── CAR ───
     quickProject('proj-car', 'Sports Car', '🏎️', [
@@ -328,8 +328,14 @@
             ['diffuser-tunnel','Venturi Tunnels','3 tunnels. 400kg downforce.','Aero',()=>box(0.5,0.08,0.3),[0,0,0],[0,0,0],0x222222],
         ]],
         ['wheel-fl','FL Wheel','20" forged Mg. Cup 2 tires.','Wheels','wheel-fl',[0.65,0.2,0.45],[1.57,0,0],0x333333,[
-            ['fl-brake','Carbon Ceramic','410mm disc. 6-piston caliper.','Brakes',()=>cyl(0.09,0.09,0.02,20),[0,0,0],[0,0,0],0x666666],
-            ['fl-susp','Double Wishbone','Pushrod. Active damping.','Suspension',()=>box(0.04,0.2,0.03),[0,-0.15,0.1],[0,0,0],0x444444],
+            ['fl-brake','Carbon Ceramic','410mm disc. 6-piston caliper.','Brakes',()=>cyl(0.09,0.09,0.02,20),[0,0,0],[0,0,0],0x666666,[
+                ['fl-pads','Brake Pads','Sintered ceramic. Low-dust.','Brakes',()=>box(0.02,0.04,0.01),[0,0.07,0],[0,0,0],0x444444],
+                ['fl-caliper','6-Piston Caliper','Monoblock aluminum.','Brakes',()=>box(0.04,0.08,0.03),[0,0.07,0],[0,0,0],0xff0000],
+            ]],
+            ['fl-susp','Double Wishbone','Pushrod. Active damping.','Suspension',()=>box(0.04,0.2,0.03),[0,-0.15,0.1],[0,0,0],0x444444,[
+                ['fl-spring','Coil Spring','Titanium. Progressive rate.','Suspension',()=>tor(0.03,0.005,8,16),[0,0,0],[1.57,0,0],0xaaaaaa],
+                ['fl-damper','Active Damper','Magnetorheological.','Suspension',()=>cyl(0.02,0.02,0.15,8),[0,0,0],[0,0,0],0x333333],
+            ]],
             ['fl-abs','ABS Sensor','Wheel speed. Traction control.','Electronics',()=>cyl(0.01,0.01,0.02,6),[0.05,0,0],[0,0,0],0x222222],
         ]],
         ['wheel-fr','FR Wheel','20" forged Mg.','Wheels','wheel-fr',[0.65,0.2,-0.45],[1.57,0,0],0x333333,[
@@ -361,10 +367,18 @@
             ['bottom','Bottom Plate','Battery mount.','Structure',()=>box(0.8,0.02,0.8),[0,-0.04,0],[0,0,0],0x1a1a1a],
         ]],
         ['top-plate','Top Plate','FC + GPS mount.','Structure','top-plate',[0,0.05,0],[0,0,0],0x444444,[]],
-        ['arm-fl','FL Arm','CCW motor.','Arms','arm-fl',[0,0,0],[0,0,0],0x00ff88,[]],
-        ['arm-fr','FR Arm','CW motor.','Arms','arm-fr',[0,0,0],[0,0,0],0x00ff88,[]],
-        ['arm-bl','BL Arm','CW motor.','Arms','arm-bl',[0,0,0],[0,0,0],0x00ff88,[]],
-        ['arm-br','BR Arm','CCW motor.','Arms','arm-br',[0,0,0],[0,0,0],0x00ff88,[]],
+        ['arm-fl','FL Arm','CCW motor.','Arms','arm-fl',[0,0,0],[0,0,0],0x00ff88,[
+            ['esc-fl','ESC FL','32-bit DShot1200.','Electronics',()=>box(0.04,0.01,0.02),[0.2,0,0],[0,0,0],0x111111],
+        ]],
+        ['arm-fr','FR Arm','CW motor.','Arms','arm-fr',[0,0,0],[0,0,0],0x00ff88,[
+            ['esc-fr','ESC FR','32-bit DShot1200.','Electronics',()=>box(0.04,0.01,0.02),[0.2,0,0],[0,0,0],0x111111],
+        ]],
+        ['arm-bl','BL Arm','CW motor.','Arms','arm-bl',[0,0,0],[0,0,0],0x00ff88,[
+            ['esc-bl','ESC BL','32-bit DShot1200.','Electronics',()=>box(0.04,0.01,0.02),[0.2,0,0],[0,0,0],0x111111],
+        ]],
+        ['arm-br','BR Arm','CCW motor.','Arms','arm-br',[0,0,0],[0,0,0],0x00ff88,[
+            ['esc-br','ESC BR','32-bit DShot1200.','Electronics',()=>box(0.04,0.01,0.02),[0.2,0,0],[0,0,0],0x111111],
+        ]],
         ['motor','Motors (4x)','2300KV brushless.','Propulsion','motor',[0.5,0.06,0.5],[0,0,0],0x666666,[
             ['motor-bearings','Bearings','NSK shielded.','Propulsion',()=>tor(0.02,0.005,6,12),[0,0,0],[0,0,0],0x888888],
         ]],
@@ -419,9 +433,16 @@
         ['solar-l','Left Array','15kW GaAs.','Power','solar-l',[-1.2,0,0],[0,0,0],0x0000aa,[
             ['solar-drive','Array Drive','Sun tracking.','Power',()=>cyl(0.02,0.02,0.06,8),[0.7,0,0],[0,0,0],0x666666],
         ]],
-        ['solar-r','Right Array','15kW.','Power','solar-r',[1.2,0,0],[0,0,0],0x0000aa,[]],
-        ['batteries','Battery Pack','100kWh Li-ion.','Power','battery-pak',[0,0,0],[0,0,0],0x444444,[]],
-        ['radiator','Thermal Radiator','Heat pipe system.','Thermal','radiator',[0,-0.4,0],[0,0,0],0x888888,[]],
+        ['solar-r','Right Array','15kW.','Power','solar-r',[1.2,0,0],[0,0,0],0x0000aa,[
+            ['solar-hinge','Deployment Hinge','Spring-loaded mechanism.','Structure',()=>cyl(0.015,0.015,0.04,8),[-0.7,0,0],[1.57,0,0],0x888888],
+        ]],
+        ['batteries','Battery Pack','100kWh Li-ion.','Power','battery-pak',[0,0,0],[0,0,0],0x444444,[
+            ['cell-module','Li-ion Module','Telsa-style 2170 cells.','Power',()=>box(0.1,0.05,0.1),[0,0,0],[0,0,0],0x555555],
+            ['bms','Battery Manager','Over-voltage protection.','Electronics',()=>box(0.04,0.02,0.04),[0,0.04,0],[0,0,0],0x111111],
+        ]],
+        ['radiator','Thermal Radiator','Heat pipe system.','Thermal','radiator',[0,-0.4,0],[0,0,0],0x888888,[
+            ['heat-pipe','Ammonia Pipe','Super-conducting heat link.','Thermal',()=>cyl(0.005,0.005,0.3,6),[0,0,0],[1.57,0,0],0xcccccc],
+        ]],
         ['thrusters','Ion Thrusters','4x Hall-effect.','Propulsion','thruster-cluster',[0,0,-0.5],[0,0,0],0x4400ff,[]],
         ['xenon','Xenon Tank','150kg propellant.','Propulsion','fuel-tank-sat',[0,0,0],[0,0,0],0x666666,[]],
     ]);
@@ -433,9 +454,18 @@
             ['hull-sect-b','Section B','Control room.','Hull',()=>cyl(0.48,0.48,0.8,16),[0,0,0],[0,0,1.57],0x445566],
             ['hull-sect-c','Section C','Engine + reactor.','Hull',()=>cyl(0.45,0.45,0.8,16),[-0.8,0,0],[0,0,1.57],0x445566],
         ]],
-        ['tower','Conning Tower','Periscopes + masts.','Hull','tower',[0.2,0.55,0],[0,0,0],0x556677,[]],
+        ['tower','Conning Tower','Periscopes + masts.','Hull','tower',[0.2,0.55,0],[0,0,0],0x556677,[
+            ['periscope','Periscope','High-resolution optical mast.','Hull',()=>cyl(0.02,0.02,0.4,12),[0,0.4,0],[0,0,0],0x333333,[
+                ['peri-lens','Optical Lens','Multi-coated sapphire glass.','Sensors',()=>sph(0.015),[0,0.2,0.02],[0,0,0],0x00d4ff],
+                ['peri-servo','Tilt Servo','Micro-stepping actuator.','Hull',()=>box(0.02,0.02,0.02),[0,0.1,0],[0,0,0],0x666666],
+            ]],
+            ['radio-mast','RF Mast','VLF/ELF communication array.','Comms',()=>cyl(0.01,0.01,0.5,8),[0.1,0.3,-0.1],[0,0,0],0x888888],
+        ]],
         ['ballast-f','Forward Ballast','2000L. Air blow.','Buoyancy','ballast-f',[1.0,-0.3,0],[0,0,0],0x334455,[
-            ['blow-valve','Blow Valve','Emergency blow.','Buoyancy',()=>cyl(0.03,0.03,0.04,8),[0.2,0.3,0],[0,0,0],0xff4444],
+            ['blow-valve','Blow Valve','Emergency blow system.','Buoyancy',()=>cyl(0.03,0.03,0.04,8),[0.2,0.3,0],[0,0,0],0xff4444,[
+                ['valve-seal','Teflon Seal','High-pressure interface.','Buoyancy',()=>tor(0.02,0.005,8,16),[0,0,0],[1.57,0,0],0xffffff],
+                ['valve-solenoid','Actuator','Redundant trigger mechanism.','Buoyancy',()=>box(0.02,0.03,0.02),[0,0.04,0],[0,0,0],0x444444],
+            ]],
         ]],
         ['ballast-a','Aft Ballast','Trim tanks.','Buoyancy','ballast-a',[-1.0,-0.3,0],[0,0,0],0x334455,[]],
         ['propulsor','Propulsor','Pump-jet. 5MW.','Propulsion','prop-sub',[-1.6,0,0],[0,0,0],0x555555,[
@@ -451,8 +481,13 @@
     // ─── SPACE STATION ───
     quickProject('proj-station', 'Space Station', '🛸', [
         ['core','Core Module','Life support + nav.','Core','core',[0,0,0],[0,0,0],0xccccdd,[
-            ['life-support','Life Support','93% efficient.','Core',()=>box(0.2,0.3,0.2),[0,0,0],[0,0,0],0x335533],
-            ['nav-computer','Nav Computer','Star tracker + IMU.','Core',()=>box(0.15,0.1,0.1),[0.2,0.3,0],[0,0,0],0x111111],
+            ['life-support','Life Support','93% efficient atmosphere control.','Core',()=>box(0.2,0.3,0.2),[0,0,0],[0,0,0],0x335533,[
+                ['co2-scrubber','CO2 Scrubber','Amine-based removal.','Core',()=>cyl(0.04,0.04,0.1,8),[0,0.1,0],[0,0,0],0x666666],
+                ['oxygen-gen','O2 Generator','Water electrolysis unit.','Core',()=>box(0.08,0.1,0.08),[0,-0.1,0.05],[0,0,0],0x00d4ff],
+            ]],
+            ['nav-computer','Nav Computer','Triple-redundant control.','Core',()=>box(0.15,0.1,0.1),[0.2,0.3,0],[0,0,0],0x111111,[
+                ['star-tracker','Star Tracker','High-precision attitude sensor.','Avionics',()=>cyl(0.02,0.03,0.04,12),[0,0.06,0],[0,0,0],0x333333],
+            ]],
         ]],
         ['lab','Science Lab','20 experiment racks.','Modules','lab',[0,0,1.2],[0,0,0],0xbbbbcc,[
             ['glovebox','Glovebox','Sealed containment.','Modules',()=>box(0.15,0.2,0.1),[0,0,0],[0,0,0],0xcccccc],
@@ -483,9 +518,13 @@
         ['hull','Hull','Composite armor. STANAG 6.','Protection','hull-tank',[0,0,0],[0,0,0],0x667744,[
             ['driver','Driver Station','3 periscopes. Joystick.','Protection',()=>box(0.3,0.2,0.3),[0.5,0.25,0],[0,0,0],0x334433],
         ]],
-        ['era','Reactive Armor','ERA tiles.','Protection','reactive',[0,0,0],[0,0,0],0x778855,[]],
+        ['era','Reactive Armor','ERA tiles.','Protection','reactive',[0,0,0],[0,0,0],0x778855,[
+            ['era-charge','Shaped Charge','Counter-HEAT explosive.','Protection',()=>box(0.04,0.04,0.02),[0,0,0.02],[0,0,0],0xccaa44],
+        ]],
         ['track-l','Left Track','Hydrostatic. 70km/h.','Mobility','track-l',[0,-0.15,0.55],[0,0,0],0x333333,[
-            ['tensioner','Track Tensioner','Hydraulic adjust.','Mobility',()=>cyl(0.03,0.03,0.08,8),[-0.6,0,0],[0,0,0],0x666666],
+            ['tensioner','Track Tensioner','Hydraulic adjust.','Mobility',()=>cyl(0.03,0.03,0.08,8),[-0.6,0,0],[0,0,0],0x666666,[
+                ['tension-cyl','Hydraulic Cylinder','Maintains 400kN track tension.','Mobility',()=>cyl(0.02,0.02,0.1,6),[0,0,0],[1.57,0,0],0x888888],
+            ]],
         ]],
         ['track-r','Right Track','Pivot steering.','Mobility','track-r',[0,-0.15,-0.55],[0,0,0],0x333333,[]],
         ['engine','Turbine Engine','1500hp. Multi-fuel.','Mobility','engine-tank',[-0.5,0.15,0],[0,0,0],0x884400,[
@@ -503,9 +542,13 @@
         ['wing-l','Left Wing','Blended WB. All-moving.','Airframe','wing-l',[0,0,0],[0,0,0],0x666677,[
             ['l-aileron','Left Aileron','Fly-by-wire.','Airframe',()=>box(0.4,0.01,0.25),[-1.2,0,-0.35],[0,0,0],0x555566],
         ]],
-        ['wing-r','Right Wing','Internal hardpoints.','Airframe','wing-r',[0,0,0],[0,0,0],0x666677,[]],
+        ['wing-r','Right Wing','Internal hardpoints.','Airframe','wing-r',[0,0,0],[0,0,0],0x666677,[
+            ['r-aileron','Right Aileron','Fly-by-wire control.','Airframe',()=>box(0.4,0.01,0.25),[-1.2,0,0.35],[0,0,0],0x555566],
+        ]],
         ['tail','Vertical Stabilizers','Canted twin tails.','Airframe','tail-v',[-1.3,0,0],[0,0,0],0x444455,[
-            ['ruddervator','Ruddervators','Combined rudder+elevator.','Airframe',()=>box(0.01,0.3,0.08),[-0.02,0.4,0],[0,0,0],0x333344],
+            ['ruddervator','Ruddervators','Combined rudder+elevator.','Airframe',()=>box(0.01,0.3,0.08),[-0.02,0.4,0],[0,0,0],0x333344,[
+                ['rudder-act','Servo Actuator','Linear electromagnetic drive.','Airframe',()=>cyl(0.01,0.01,0.04,6),[0,-0.05,0],[0,0,0],0x666666],
+            ]],
         ]],
         ['intake','Intakes','S-duct. DSI.','Propulsion','intake',[0.3,-0.15,0.2],[0,0,0],0x333344,[
             ['dsi-bump','DSI Bump','Boundary layer removal.','Propulsion',()=>sph(0.06,8,6),[-0.35,0.05,0],[0,0,0],0x333344],

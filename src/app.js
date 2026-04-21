@@ -18,6 +18,7 @@
         confusionScore: { score: 0, lastReset: Date.now() },
         selectedProject: null,
         selectedPart: null,
+        activePartId: null,
         projects: [],
         peer: null,
         peerConn: null,
@@ -1267,6 +1268,7 @@
     }
 
     function showPartInfo(data) {
+        state.activePartId = data.partId;
         // Enrich description with engine data
         let enrichedDesc = data.partDesc || '';
         if (window.JarvisExploderEngine) {
@@ -1335,7 +1337,7 @@
             mesh.material.emissiveIntensity = 0.05;
         }
 
-        if (exploderSelected?.userData.partId === partId) {
+        if (state.activePartId === partId) {
             const statusEl = document.getElementById('part-sim-status');
             if (statusEl) {
                 statusEl.textContent = newState.toUpperCase();

@@ -1,0 +1,21 @@
+# Supabase project config
+project_id = "3d-jarvis"
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+
+[studio]
+enabled = false
+
+[inbucket]
+enabled = false
+
+[auth]
+enabled = false
+
+[edge_runtime]
+policy = "per_worker"

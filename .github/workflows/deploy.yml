@@ -1,4 +1,4 @@
-name: Deploy
+name: Deploy to Vercel
 
 on:
   push:
@@ -6,47 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  supabase:
-    name: Supabase Edge Functions
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: supabase/setup-cli@v1
-        with:
-          version: latest
-
-      - uses: denoland/setup-deno@v1
-        with:
-          deno-version: v1.x
-
-      - name: Verify edge functions
-        run: |
-          deno check supabase/functions/serve-site/index.ts
-          deno check supabase/functions/api-proxy/index.ts
-
-      - name: Prepare public/
-        run: |
-          mkdir -p public
-          cp index.html public/
-          cp -r src public/
-          cp -r models public/
-          cp server.js public/
-          sed -i 's|<script src="src/app.js"></script>|<script src="src/app.js"></script>\n    <script>window.__SUPABASE_FN_URL = "https://${{ secrets.SUPABASE_PROJECT_REF }}.functions.supabase.co";</script>\n    <script src="src/deploy-config.js"></script>|' public/index.html
-
-      - name: Deploy to Supabase
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
-        run: |
-          supabase link --project-ref $SUPABASE_PROJECT_REF
-          supabase functions deploy serve-site --no-verify-jwt
-          supabase functions deploy api-proxy --no-verify-jwt
-
-      - run: rm -rf public
-
-  vercel:
-    name: Vercel
+  deploy:
+    name: Vercel Production Deploy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,11 +19,11 @@ jobs:
       - name: Install Vercel CLI
         run: npm i -g vercel@latest
 
-      - name: Pull Vercel config
+      - name: Pull Vercel project settings
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
 
-      - name: Build
+      - name: Build project
         run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
 
-      - name: Deploy
+      - name: Deploy to production
         run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}

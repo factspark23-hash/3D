@@ -21,6 +21,7 @@
         projects: [],
         peer: null,
         peerConn: null,
+        peerCall: null,
         roomCode: null,
         roomPassword: null,
         gestureModels: [],
@@ -632,6 +633,11 @@
         initUploadSection();
         initAIChat();
 
+        // Engine keyboard navigation → part click
+        document.addEventListener('engine:partClick', (e) => {
+            if (e.detail && e.detail.mesh) handlePartClick(e.detail.mesh);
+        });
+
         // Initialize sounds on first user interaction
         document.addEventListener('click', () => {
             JarvisSounds.init();
@@ -855,6 +861,8 @@
                     rebuildExploderModel(state.selectedProject);
                 }
             } else {
+                // Leaving exploder — clean up engine
+                if (window.JarvisExploderEngine) window.JarvisExploderEngine.close();
                 state.selectedProject = null;
                 state.selectedPart = null;
                 showSection('home');
@@ -967,7 +975,18 @@
         const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
         if (exploderHovered && exploderHovered !== exploderSelected) resetMeshHighlight(exploderHovered);
         if (intersects.length > 0) {
-            const mesh = intersects[0].object;
+            // Pick the deepest (most nested) part first, not just the outermost surface hit.
+            // This lets users click child parts even when inside an opaque parent.
+            let mesh = intersects[0].object;
+            let maxDepth = mesh.userData.depth || 0;
+            for (let i = 1; i < intersects.length; i++) {
+                const candidate = intersects[i].object;
+                const d = candidate.userData.depth || 0;
+                if (d > maxDepth) {
+                    maxDepth = d;
+                    mesh = candidate;
+                }
+            }
             if (mesh.userData.partId) {
                 exploderHovered = mesh;
                 highlightMesh(mesh, false);
@@ -1002,7 +1021,15 @@
     function showTooltip(e, data) {
         const tooltip = document.getElementById('part-tooltip');
         tooltip.classList.remove('hidden');
-        const ci = data.hasChildren ? ' - ' + data.childCount + ' sub-parts' : '';
+        let ci = data.hasChildren ? ' - ' + data.childCount + ' sub-parts' : '';
+
+        // Engine enhancements
+        if (window.JarvisExploderEngine) {
+            const mesh = exploderHovered;
+            const extras = window.JarvisExploderEngine.onPartHover(mesh);
+            if (extras) ci += extras;
+        }
+
         tooltip.innerHTML = '<strong>' + data.partName + '</strong>' + ci + '<br><span style="color:#888;font-size:11px">' + data.partDesc.slice(0, 80) + '</span>';
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY - 10) + 'px';
@@ -1010,6 +1037,12 @@
     function hideTooltip() { document.getElementById('part-tooltip').classList.add('hidden'); }
 
     function handlePartClick(mesh) {
+        // Let engine intercept (multi-select, measure, annotation)
+        if (window.JarvisExploderEngine) {
+            const result = window.JarvisExploderEngine.onPartClick(mesh);
+            if (result === 'consumed') return;
+        }
+
         const data = mesh.userData;
         logAction('part_click', data.partName);
         JarvisSounds.explode();
@@ -1069,6 +1102,11 @@
         exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 }; exploderExploded = false; exploderExplodeProgress = 0;
         showPartInfo({ partId: partDef.id, partName: partDef.name, partDesc: partDef.desc || '' });
         renderSidePanel(partId);
+
+        // Re-init engine with new flat parts
+        if (window.JarvisExploderEngine) {
+            window.JarvisExploderEngine.init(exploderFlatParts, exploderScene, exploderRenderer);
+        }
     }
 
     function findPartDef(parts, id) {
@@ -1095,6 +1133,11 @@
         document.getElementById('part-detail-desc').textContent = proj.desc;
         if (exploderAnimId) cancelAnimationFrame(exploderAnimId);
         animateExploder();
+
+        // Init exploder engine
+        if (window.JarvisExploderEngine) {
+            window.JarvisExploderEngine.init(flatParts, exploderScene, exploderRenderer);
+        }
     }
 
     function animateExploder() {
@@ -1212,11 +1255,27 @@
         initExploderRenderer();
         rebuildExploderModel(proj);
         updateBreadcrumbDisplay();
+
+        // Bind engine keyboard shortcuts (once)
+        if (window.JarvisExploderEngine && !window._engineKeysBound) {
+            window.JarvisExploderEngine.bindKeyboard();
+            window._engineKeysBound = true;
+        }
     }
 
     function showPartInfo(data) {
+        // Enrich description with engine data
+        let enrichedDesc = data.partDesc || '';
+        if (window.JarvisExploderEngine) {
+            const mesh = exploderSelected || exploderHovered;
+            if (mesh) {
+                const enriched = window.JarvisExploderEngine.enrichPartDetail(mesh);
+                if (enriched) enrichedDesc = enriched;
+            }
+        }
+
         document.getElementById('part-detail-name').textContent = data.partName;
-        document.getElementById('part-detail-desc').textContent = data.partDesc;
+        document.getElementById('part-detail-desc').textContent = enrichedDesc;
         const detailInfo = document.getElementById('part-detail-info');
         const oldAnn = detailInfo.querySelector('.annotation-wrapper');
         if (oldAnn) oldAnn.remove();
@@ -1336,7 +1395,18 @@
                 const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
 
                 if (intersects.length > 0) {
-                    const mesh = intersects[0].object;
+                    // Pick the deepest (most nested) part first, not just the outermost surface hit.
+                    // This lets users click child parts even when inside an opaque parent.
+                    let mesh = intersects[0].object;
+                    let maxDepth = mesh.userData.depth || 0;
+                    for (let i = 1; i < intersects.length; i++) {
+                        const candidate = intersects[i].object;
+                        const d = candidate.userData.depth || 0;
+                        if (d > maxDepth) {
+                            maxDepth = d;
+                            mesh = candidate;
+                        }
+                    }
                     if (mesh.userData.partId) {
                         // Highlight
                         if (exploderHovered && exploderHovered !== exploderSelected) resetMeshHighlight(exploderHovered);
@@ -1493,21 +1563,31 @@
                             addRoomMessage('system', 'Wrong password — connection rejected');
                             setTimeout(() => conn.close(), 500);
                         }
-                    } else if (authenticated && data.type === 'chat') {
-                        addRoomMessage('remote', data.text);
                     }
+                    // Chat handled by setupDataChannel — no duplicate listener
                 });
             });
 
             state.peer.on('call', async call => {
-                // Only answer if we have an authenticated peer
                 if (!state.peerConn) { call.close(); return; }
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                document.getElementById('local-video').srcObject = stream;
-                call.answer(stream);
-                call.on('stream', remoteStream => {
-                    document.getElementById('remote-video').srcObject = remoteStream;
-                });
+                state.peerCall = call;
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    document.getElementById('local-video').srcObject = stream;
+                    call.answer(stream);
+                    call.on('stream', remoteStream => {
+                        document.getElementById('remote-video').srcObject = remoteStream;
+                    });
+                    call.on('close', () => {
+                        addRoomMessage('system', 'Video call ended');
+                    });
+                    call.on('error', (err) => {
+                        addRoomMessage('system', 'Call error: ' + err.message);
+                    });
+                } catch (err) {
+                    addRoomMessage('system', 'Camera/mic not available — chat only');
+                    call.answer(); // answer without stream
+                }
             });
         } catch (err) {
             addRoomMessage('system', 'Error: ' + err.message);
@@ -1539,27 +1619,35 @@
                         authPending = false;
                         showActiveRoom();
                         addRoomMessage('system', `Joined room: ${code}`);
-                        setupDataChannel(conn);
+                        // setupDataChannel adds the chat listener — don't duplicate here
 
                         // Start video call after auth
                         navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
                             document.getElementById('local-video').srcObject = stream;
                             const call = state.peer.call('jarvis-' + code.toLowerCase(), stream);
+                            state.peerCall = call;
                             call.on('stream', remoteStream => {
                                 document.getElementById('remote-video').srcObject = remoteStream;
+                            });
+                            call.on('close', () => {
+                                addRoomMessage('system', 'Video call ended');
+                            });
+                            call.on('error', (err) => {
+                                addRoomMessage('system', 'Call error: ' + err.message);
                             });
                         }).catch(() => {
                             addRoomMessage('system', 'Camera/mic not available — chat only');
                         });
+
+                        setupDataChannel(conn);
                     } else if (data.type === 'auth_fail' && authPending) {
                         authPending = false;
                         addRoomMessage('system', 'Wrong password — connection rejected');
                         setTimeout(() => {
                             leaveRoom();
                         }, 1000);
-                    } else if (data.type === 'chat') {
-                        addRoomMessage('remote', data.text);
                     }
+                    // Chat handled by setupDataChannel — no duplicate listener here
                 });
 
                 conn.on('close', () => {
@@ -1590,17 +1678,41 @@
     }
 
     function leaveRoom() {
-        if (state.peerConn) state.peerConn.close();
-        if (state.peer) state.peer.destroy();
-        state.peer = null; state.peerConn = null; state.roomCode = null;
+        // Close video call
+        if (state.peerCall) {
+            try { state.peerCall.close(); } catch (e) {}
+            state.peerCall = null;
+        }
+        // Close data connection
+        if (state.peerConn) {
+            try { state.peerConn.close(); } catch (e) {}
+        }
+        // Destroy peer
+        if (state.peer) {
+            try { state.peer.destroy(); } catch (e) {}
+        }
+        state.peer = null;
+        state.peerConn = null;
+        state.roomCode = null;
+        state.roomPassword = null;
 
+        // Reset UI
         document.getElementById('room-active').classList.add('hidden');
         document.getElementById('room-lobby').classList.remove('hidden');
         document.getElementById('room-messages').innerHTML = '';
 
+        // Stop local camera/mic
         const localVideo = document.getElementById('local-video');
-        if (localVideo.srcObject) { localVideo.srcObject.getTracks().forEach(t => t.stop()); localVideo.srcObject = null; }
-        document.getElementById('remote-video').srcObject = null;
+        if (localVideo.srcObject) {
+            localVideo.srcObject.getTracks().forEach(t => t.stop());
+            localVideo.srcObject = null;
+        }
+        // Clear remote video
+        const remoteVideo = document.getElementById('remote-video');
+        if (remoteVideo.srcObject) {
+            remoteVideo.srcObject.getTracks().forEach(t => t.stop());
+            remoteVideo.srcObject = null;
+        }
     }
 
     function sendRoomMsg() {

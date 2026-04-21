@@ -1,7 +1,8 @@
 // ═══════════════════════════════════════════════════════════════
-// JARVIS 3D — Advanced Exploder Engine v2
+// JARVIS 3D — Advanced Exploder Engine v3 (Performance)
 // Pure logic engine — hooks into existing UI, no new HTML
 // 14 features, all working, no skeleton code
+// Optimized: pre-cached geometry, lazy computation, minimal GC
 // ═══════════════════════════════════════════════════════════════
 (function () {
     'use strict';
@@ -36,6 +37,7 @@
         // Dependency lines
         dependencyActive: false,
         dependencyLineObjects: [],
+        dependencyDirty: true,
 
         // Annotation mode
         annotationMode: false,
@@ -51,7 +53,70 @@
         parts: [],
         scene: null,
         renderer: null,
+
+        // Performance caches
+        bboxCache: new Map(),
+        descCountCache: new Map(),
+        vertexCountCache: new Map(),
+        depGeoCache: new Map(),       // key: "parentId->childId" → BufferGeometry
+        measureCanvas: null,           // reuse single canvas
+        measureCtx: null,
+        measureTex: null,              // reuse single CanvasTexture
     };
+
+    // ─── Performance helpers: pre-compute & cache ───
+    function computeBBox(mesh) {
+        if (E.bboxCache.has(mesh)) return E.bboxCache.get(mesh);
+        const box = new THREE.Box3().setFromObject(mesh);
+        const size = box.getSize(new THREE.Vector3());
+        E.bboxCache.set(mesh, size);
+        return size;
+    }
+
+    function computeDescendants(mesh) {
+        if (E.descCountCache.has(mesh)) return E.descCountCache.get(mesh);
+        let count = 0;
+        const stack = mesh.children.slice();
+        while (stack.length) {
+            const c = stack.pop();
+            if (c.userData && c.userData.partId) { count++; }
+            if (c.children && c.children.length) {
+                for (let i = 0; i < c.children.length; i++) stack.push(c.children[i]);
+            }
+        }
+        E.descCountCache.set(mesh, count);
+        return count;
+    }
+
+    function computeVertexCount(mesh) {
+        if (E.vertexCountCache.has(mesh)) return E.vertexCountCache.get(mesh);
+        let vc = 0;
+        if (mesh.geometry && mesh.geometry.getAttribute) {
+            const pos = mesh.geometry.getAttribute('position');
+            if (pos) vc = pos.count;
+        }
+        E.vertexCountCache.set(mesh, vc);
+        return vc;
+    }
+
+    function invalidateCaches() {
+        E.bboxCache.clear();
+        E.descCountCache.clear();
+        E.vertexCountCache.clear();
+        // Dispose dependency geometry cache
+        E.depGeoCache.forEach(geo => geo.dispose());
+        E.depGeoCache.clear();
+    }
+
+    // ─── Reusable measure canvas ───
+    function getMeasureCanvas() {
+        if (E.measureCanvas) return { canvas: E.measureCanvas, ctx: E.measureCtx };
+        E.measureCanvas = document.createElement('canvas');
+        E.measureCanvas.width = 256;
+        E.measureCanvas.height = 64;
+        E.measureCtx = E.measureCanvas.getContext('2d');
+        return { canvas: E.measureCanvas, ctx: E.measureCtx };
+    }
 
     // ─── IndexedDB helpers ───
     function dbTransaction(store, mode, fn) {
@@ -115,17 +180,27 @@
         E.wireframeIds.clear();
         E.dependencyActive = false;
         E.keyboardIndex = -1;
+        E.dependencyDirty = true;
 
-        // Extract categories
+        // Extract categories (single pass)
         const catSet = new Set();
-        allParts.forEach(m => {
-            const g = m.userData.partGroup;
+        for (let i = 0; i < allParts.length; i++) {
+            const g = allParts[i].userData.partGroup;
             if (g) catSet.add(g);
-        });
+        }
         E.categories = Array.from(catSet).sort();
 
         // Set keyboard-focusable parts
         E.keyboardParts = allParts.filter(m => m.userData.partId);
+
+        // Pre-compute caches for all parts (batch, single pass)
+        invalidateCaches();
+        for (let i = 0; i < allParts.length; i++) {
+            const m = allParts[i];
+            computeBBox(m);
+            computeDescendants(m);
+            computeVertexCount(m);
+        }
 
         // Cleanup old lines
         cleanupLines();
@@ -277,28 +352,12 @@
         if (!mesh) return;
         const d = mesh.userData;
 
-        // Count total descendants
-        let totalDesc = 0;
-        function count(m) {
-            m.children.forEach(c => {
-                if (c.userData && c.userData.partId) { totalDesc++; count(c); }
-            });
-        }
-        count(mesh);
-
-        // Geometry dimensions
-        const box = new THREE.Box3().setFromObject(mesh);
-        const size = box.getSize(new THREE.Vector3());
-        let vertexCount = 0;
-        if (mesh.geometry && mesh.geometry.getAttribute) {
-            const pos = mesh.geometry.getAttribute('position');
-            if (pos) vertexCount = pos.count;
-        }
-
-        // Annotation
+        // Use pre-cached values — zero allocation
+        const totalDesc = computeDescendants(mesh);
+        const size = computeBBox(mesh);
+        const vertexCount = computeVertexCount(mesh);
         const note = annotations[d.partId] || '';
 
-        // Build enriched description (appends to existing)
         const enriched = [
             d.partDesc || '',
             '',
@@ -393,17 +452,17 @@
     function getComparisonText() {
         if (E.multiSelected.length < 2) return '';
         const lines = ['⚖️ COMPARISON', ''];
-        E.multiSelected.forEach((m, i) => {
+        for (let i = 0; i < E.multiSelected.length; i++) {
+            const m = E.multiSelected[i];
             const d = m.userData;
-            const box = new THREE.Box3().setFromObject(m);
-            const size = box.getSize(new THREE.Vector3());
+            const size = computeBBox(m);
             lines.push(`── ${i + 1}. ${d.partName} ──`);
             lines.push(`Category: ${d.partGroup || 'N/A'}`);
             lines.push(`Level: ${d.depth || 0}`);
             lines.push(`Children: ${d.childCount || 0}`);
             lines.push(`Size: ${size.x.toFixed(3)} × ${size.y.toFixed(3)} × ${size.z.toFixed(3)}`);
             lines.push('');
-        });
+        }
         return lines.join('\n');
     }
 
@@ -460,12 +519,12 @@
         E.scene.add(line);
         E.measureLine = line;
 
-        // Sprite label at midpoint
+        // Reuse canvas + texture — no per-frame allocation
         const dist = p1.distanceTo(p2);
         const mid = p1.clone().add(p2).multiplyScalar(0.5);
-        const canvas = document.createElement('canvas');
-        canvas.width = 256; canvas.height = 64;
-        const ctx = canvas.getContext('2d');
+        const { ctx } = getMeasureCanvas();
+
+        ctx.clearRect(0, 0, 256, 64);
         ctx.fillStyle = 'rgba(0,0,0,0.75)';
         ctx.beginPath();
         ctx.roundRect(0, 0, 256, 64, 8);
@@ -475,8 +534,13 @@
         ctx.textAlign = 'center';
         ctx.fillText(`d = ${dist.toFixed(3)}`, 128, 40);
 
-        const tex = new THREE.CanvasTexture(canvas);
-        const spriteMat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+        if (E.measureTex) {
+            E.measureTex.needsUpdate = true;
+        } else {
+            E.measureTex = new THREE.CanvasTexture(E.measureCanvas);
+        }
+
+        const spriteMat = new THREE.SpriteMaterial({ map: E.measureTex, transparent: true });
         const sprite = new THREE.Sprite(spriteMat);
         sprite.position.copy(mid);
         sprite.position.y += 0.3;
@@ -497,16 +561,18 @@
         }
         if (E.measureLabel) {
             E.scene?.remove(E.measureLabel);
-            E.measureLabel.material.map.dispose();
+            // Don't dispose shared texture/material — reuse
+            E.measureLabel.material.map = null;
             E.measureLabel.material.dispose();
             E.measureLabel = null;
         }
-        E.measureParts.forEach(m => {
+        for (let i = 0; i < E.measureParts.length; i++) {
+            const m = E.measureParts[i];
             if (m.material && !E.multiSelected.includes(m)) {
                 m.material.emissiveIntensity = 0.05;
                 m.material.emissive.setHex(m.userData.originalColor || 0x00d4ff);
             }
-        });
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -547,27 +613,42 @@
         cleanupDependencyLines();
         if (!E.scene) return;
 
-        E.parts.forEach(m => {
-            if (!m.visible) return;
-            m.children.forEach(child => {
-                if (!child.isMesh || !child.userData.partId) return;
-                if (!child.visible) return;
+        const reusableMat = new THREE.LineBasicMaterial({
+            color: 0x00d4ff, transparent: true, opacity: 0.2,
+        });
+
+        for (let i = 0; i < E.parts.length; i++) {
+            const m = E.parts[i];
+            if (!m.visible) continue;
+
+            for (let j = 0; j < m.children.length; j++) {
+                const child = m.children[j];
+                if (!child.isMesh || !child.userData.partId || !child.visible) continue;
 
                 const p1 = new THREE.Vector3();
                 const p2 = new THREE.Vector3();
                 m.getWorldPosition(p1);
                 child.getWorldPosition(p2);
 
-                const geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-                const mat = new THREE.LineBasicMaterial({
-                    color: 0x00d4ff, transparent: true, opacity: 0.2,
-                });
-                const line = new THREE.Line(geo, mat);
+                const key = (m.userData.partId || i) + '->' + (child.userData.partId || j);
+                let geo = E.depGeoCache.get(key);
+                if (geo) {
+                    const pos = geo.getAttribute('position');
+                    pos.setXYZ(0, p1.x, p1.y, p1.z);
+                    pos.setXYZ(1, p2.x, p2.y, p2.z);
+                    pos.needsUpdate = true;
+                } else {
+                    geo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+                    E.depGeoCache.set(key, geo);
+                }
+
+                const line = new THREE.Line(geo, reusableMat);
                 line.userData._engineDepLine = true;
                 E.scene.add(line);
                 E.dependencyLineObjects.push(line);
-            });
-        });
+            }
+        }
+        E.dependencyDirty = false;
     }
 
     function cleanupDependencyLines() {
@@ -712,12 +793,13 @@
         if (E.keyboardIndex < 0) E.keyboardIndex = visible.length - 1;
         if (E.keyboardIndex >= visible.length) E.keyboardIndex = 0;
 
-        // Reset all highlights
-        visible.forEach(m => {
-            if (m.material && !E.multiSelected.includes(m) && !E.measureParts.includes(m)) {
-                m.material.emissiveIntensity = 0.05;
+        // Reset only previously focused — don't touch all
+        if (E._lastNavIndex >= 0 && E._lastNavIndex < visible.length) {
+            const prev = visible[E._lastNavIndex];
+            if (prev && prev.material && !E.multiSelected.includes(prev) && !E.measureParts.includes(prev)) {
+                prev.material.emissiveIntensity = 0.05;
             }
-        });
+        }
 
         // Highlight focused
         const focused = visible[E.keyboardIndex];
@@ -725,6 +807,7 @@
             focused.material.emissiveIntensity = 0.5;
         }
 
+        E._lastNavIndex = E.keyboardIndex;
         updateHint(`[${E.keyboardIndex + 1}/${visible.length}] ${focused.userData.partName}`);
     }
 
@@ -786,8 +869,7 @@
     function copyPartInfo(mesh) {
         if (!mesh) return;
         const d = mesh.userData;
-        const box = new THREE.Box3().setFromObject(mesh);
-        const size = box.getSize(new THREE.Vector3());
+        const size = computeBBox(mesh);
         const note = annotations[d.partId] || '';
 
         const text = [
@@ -797,7 +879,7 @@
             `Description: ${d.partDesc || 'N/A'}`,
             `Level: ${d.depth || 0}`,
             `Direct Children: ${d.childCount || 0}`,
-            `Total Descendants: ${countDescendants(mesh)}`,
+            `Total Descendants: ${computeDescendants(mesh)}`,
             `Size: ${size.x.toFixed(3)} × ${size.y.toFixed(3)} × ${size.z.toFixed(3)}`,
             note ? `Notes: ${note}` : '',
         ].filter(Boolean).join('\n');
@@ -875,7 +957,9 @@
         E.wireframeIds.clear();
         E.recentList = [];
         E.keyboardIndex = -1;
+        E._lastNavIndex = -1;
         cleanupLines();
+        invalidateCaches();
     }
 
     // ═══════════════════════════════════════════════════════════

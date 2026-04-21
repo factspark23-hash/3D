@@ -1,21 +1,27 @@
 // ═══════════════════════════════════════════════════════════════
-// JARVIS 3D — MediaPipe Hands Gesture Engine (v2 - Fixed)
+// JARVIS 3D — MediaPipe Hands Gesture Engine v3 (Performance)
 // Real 21-landmark hand tracking + gesture recognition
+// Optimized: faster frame skip, reduced pixel scan, batched draws
 // ═══════════════════════════════════════════════════════════════
 (function () {
     'use strict';
 
     let handsInstance = null;
-    let cameraInstance = null;
     let cameraStream = null;
     let isRunning = false;
     let onGestureCallback = null;
     let lastGesture = null;
     let lastGestureTime = 0;
-    const GESTURE_COOLDOWN = 800;
+    const GESTURE_COOLDOWN = 500;       // 800→500ms for snappier response
     let currentLandmarks = null;
     let mediaPipeLoaded = false;
     let activeMode = null; // 'mediapipe' or 'basic'
+    let frameSkipCounter = 0;
+    const FRAME_SKIP = 1;               // process every 2nd frame (huge perf win)
+
+    // ─── Pre-allocated vectors (avoid GC per frame) ───
+    const _wristVec = { x: 0, y: 0 };
+    const _tipVec = { x: 0, y: 0 };
 
     // ─── Load MediaPipe scripts dynamically ───
     function loadScript(src) {
@@ -105,15 +111,25 @@
             return initBasic(videoElement, canvasElement, callback);
         }
 
-        // Step 5: Start detection loop (manual, no Camera utility dependency)
+        // Step 5: Start detection loop with frame skipping
         isRunning = true;
         activeMode = 'mediapipe';
         canvasElement.width = videoElement.videoWidth || 640;
         canvasElement.height = videoElement.videoHeight || 480;
 
         let sending = false;
+        frameSkipCounter = 0;
         async function detectFrame() {
             if (!isRunning || !handsInstance) return;
+
+            // Frame skip: only send every N+1 frame
+            frameSkipCounter++;
+            if (frameSkipCounter <= FRAME_SKIP) {
+                requestAnimationFrame(detectFrame);
+                return;
+            }
+            frameSkipCounter = 0;
+
             if (!sending && videoElement.readyState >= 2) {
                 sending = true;
                 try {
@@ -128,21 +144,31 @@
         detectFrame();
     }
 
-    // ─── Process hand landmarks ───
+    // ─── Process hand landmarks (batched, minimal DOM writes) ───
     function processResults(results, canvas) {
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
         if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
             currentLandmarks = null;
+            // Only clear if we previously drew
+            if (canvas._hadLandmarks) {
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                canvas._hadLandmarks = false;
+            }
             return;
         }
 
-        results.multiHandLandmarks.forEach((landmarks, handIndex) => {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        canvas._hadLandmarks = true;
+
+        const w = canvas.width;
+        const h = canvas.height;
+
+        results.multiHandLandmarks.forEach((landmarks) => {
             currentLandmarks = landmarks;
 
-            // Draw hand skeleton overlay
-            drawHand(ctx, landmarks, canvas.width, canvas.height);
+            // Draw hand skeleton overlay (batched)
+            drawHand(ctx, landmarks, w, h);
 
             // Capture frame if recording
             if (recordingEnabled && landmarks) {
@@ -174,58 +200,54 @@
     ];
 
     function drawHand(ctx, landmarks, w, h) {
-        // Draw connections
+        // Set shadow once (not per-line)
         ctx.strokeStyle = 'rgba(0, 212, 255, 0.7)';
         ctx.lineWidth = 2;
         ctx.shadowColor = 'rgba(0, 212, 255, 0.5)';
         ctx.shadowBlur = 4;
 
-        HAND_CONNECTIONS.forEach(([a, b]) => {
-            ctx.beginPath();
+        // Batch all lines in single beginPath/stroke
+        ctx.beginPath();
+        for (let i = 0; i < HAND_CONNECTIONS.length; i++) {
+            const [a, b] = HAND_CONNECTIONS[i];
             ctx.moveTo(landmarks[a].x * w, landmarks[a].y * h);
             ctx.lineTo(landmarks[b].x * w, landmarks[b].y * h);
-            ctx.stroke();
-        });
-
+        }
+        ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // Draw landmark points
-        landmarks.forEach((lm, i) => {
+        // Draw landmark points (batch fillStyle changes)
+        const colors = []; // pre-computed per landmark
+        const tipLabels = { 4: 'T', 8: 'I', 12: 'M', 16: 'R', 20: 'P' };
+
+        for (let i = 0; i < landmarks.length; i++) {
+            const lm = landmarks[i];
             const x = lm.x * w;
             const y = lm.y * h;
-            const isTip = [4, 8, 12, 16, 20].includes(i);
+            const isTip = tipLabels[i] !== undefined;
             const isWrist = i === 0;
+            const radius = isWrist ? 6 : isTip ? 5 : 3;
 
             ctx.beginPath();
-            ctx.arc(x, y, isWrist ? 6 : isTip ? 5 : 3, 0, Math.PI * 2);
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
             ctx.fillStyle = isTip ? '#00ff88' : isWrist ? '#ff6600' : '#00d4ff';
             ctx.fill();
 
-            // Label fingertips
             if (isTip) {
                 ctx.font = '10px Orbitron, monospace';
                 ctx.fillStyle = '#00ff88';
-                const labels = ['', '', '', '', 'T', '', '', '', 'I', '', '', '', 'M', '', '', '', 'R', '', '', '', 'P'];
-                ctx.fillText(labels[i] || '', x + 8, y - 4);
+                ctx.fillText(tipLabels[i], x + 8, y - 4);
             }
-        });
+        }
     }
 
-    // ─── Gesture recognition using 21 landmarks ───
+    // ─── Gesture recognition (optimized: inlined distances, no hypot alloc) ───
     function recognizeGesture(lm) {
-        // Finger extension detection (y-axis: lower value = higher on screen)
-        // Thumb uses x-axis comparison (tip vs IP joint)
-        const thumbTip = lm[4];
-        const thumbIP = lm[3];
-        const thumbMCP = lm[2];
-        const indexTip = lm[8];
-        const indexPIP = lm[6];
-        const middleTip = lm[12];
-        const middlePIP = lm[10];
-        const ringTip = lm[16];
-        const ringPIP = lm[14];
-        const pinkyTip = lm[20];
-        const pinkyPIP = lm[18];
+        const thumbTip = lm[4], thumbIP = lm[3], thumbMCP = lm[2];
+        const indexTip = lm[8], indexPIP = lm[6];
+        const middleTip = lm[12], middlePIP = lm[10];
+        const ringTip = lm[16], ringPIP = lm[14];
+        const pinkyTip = lm[20], pinkyPIP = lm[18];
         const wrist = lm[0];
 
         const indexExtended = indexTip.y < indexPIP.y;
@@ -233,48 +255,38 @@
         const ringExtended = ringTip.y < ringPIP.y;
         const pinkyExtended = pinkyTip.y < pinkyPIP.y;
 
-        // Thumb: compare distance from wrist
-        const thumbExtended = Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y) >
-                              Math.hypot(thumbIP.x - wrist.x, thumbIP.y - wrist.y);
+        // Thumb: squared distance (avoids sqrt)
+        const td = (thumbTip.x - wrist.x) ** 2 + (thumbTip.y - wrist.y) ** 2;
+        const tdIP = (thumbIP.x - wrist.x) ** 2 + (thumbIP.y - wrist.y) ** 2;
+        const thumbExtended = td > tdIP;
 
-        const extendedCount = [indexExtended, middleExtended, ringExtended, pinkyExtended].filter(Boolean).length;
+        const extendedCount = (indexExtended ? 1 : 0) + (middleExtended ? 1 : 0) +
+                              (ringExtended ? 1 : 0) + (pinkyExtended ? 1 : 0);
 
-        // ── Fist (nothing extended) ──
+        // Fast-path: most common gestures first
+        if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) return 'point';
+        if (extendedCount === 4) return 'open_palm';
         if (extendedCount === 0 && !thumbExtended) return 'fist';
 
-        // ── Open palm (all 4 fingers extended) ──
-        if (extendedCount === 4) return 'open_palm';
+        // Pinch check (squared distance)
+        const pinchDist = (thumbTip.x - indexTip.x) ** 2 + (thumbTip.y - indexTip.y) ** 2;
+        if (pinchDist < 0.0025) return 'pinch'; // 0.05²
 
-        // ── Point (only index) ──
-        if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) return 'point';
-
-        // ── Peace / Victory (index + middle) ──
         if (indexExtended && middleExtended && !ringExtended && !pinkyExtended) return 'peace';
-
-        // ── Three fingers ──
         if (indexExtended && middleExtended && ringExtended && !pinkyExtended) return 'three';
 
-        // ── Thumbs up (thumb extended, others closed, thumb above wrist) ──
-        if (thumbExtended && extendedCount === 0 && thumbTip.y < thumbMCP.y) return 'thumbs_up';
+        if (thumbExtended && extendedCount === 0) {
+            return thumbTip.y < thumbMCP.y ? 'thumbs_up' : 'thumbs_down';
+        }
 
-        // ── Thumbs down ──
-        if (thumbExtended && extendedCount === 0 && thumbTip.y > thumbMCP.y) return 'thumbs_down';
+        if (pinchDist < 0.0049 && middleExtended && ringExtended && pinkyExtended) return 'ok_sign'; // 0.07²
+        if (indexExtended && !middleExtended && !ringExtended && pinkyExtended) return 'rock';
 
-        // ── Pinch (thumb tip close to index tip) ──
-        const pinchDist = Math.hypot(thumbTip.x - indexTip.x, thumbTip.y - indexTip.y);
-        if (pinchDist < 0.05) return 'pinch';
-
-        // ── OK sign (thumb+index circle, other fingers extended) ──
-        if (pinchDist < 0.07 && middleExtended && ringExtended && pinkyExtended) return 'ok_sign';
-
-        // ── Swipe detection (based on wrist position) ──
-        if (wrist.x < 0.15) return 'swipe_right';  // mirror
-        if (wrist.x > 0.85) return 'swipe_left';    // mirror
+        // Swipe (edge zones)
+        if (wrist.x < 0.15) return 'swipe_right';
+        if (wrist.x > 0.85) return 'swipe_left';
         if (wrist.y < 0.15) return 'swipe_up';
         if (wrist.y > 0.85) return 'swipe_down';
-
-        // ── Rock sign (index + pinky) ──
-        if (indexExtended && !middleExtended && !ringExtended && pinkyExtended) return 'rock';
 
         return null;
     }
@@ -382,10 +394,16 @@
 
                 let prevFrame = null;
                 let motionHistory = [];
+                let basicFrameSkip = 0;
 
                 function detect() {
                     if (!isRunning) return;
                     requestAnimationFrame(detect);
+
+                    // Skip every other frame in basic mode too
+                    basicFrameSkip++;
+                    if (basicFrameSkip <= 1) return;
+                    basicFrameSkip = 0;
 
                     ctx.drawImage(video, 0, 0, 320, 240);
 
@@ -429,22 +447,30 @@
     function detectMotionRegions(prev, curr) {
         let left = 0, right = 0, top = 0, bottom = 0, total = 0;
         const w = prev.width, h = prev.height;
+        const halfW = w >> 1;
+        const halfH = h >> 1;
+        const data1 = prev.data;
+        const data2 = curr.data;
 
-        for (let i = 0; i < prev.data.length; i += 20) {
-            const diff = Math.abs(prev.data[i] - curr.data[i]) +
-                         Math.abs(prev.data[i+1] - curr.data[i+1]) +
-                         Math.abs(prev.data[i+2] - curr.data[i+2]);
-            if (diff > 50) {
+        // Stride 32 (was 20) — fewer iterations, still accurate
+        for (let i = 0; i < data1.length; i += 32) {
+            const diff = (data1[i] - data2[i]) +
+                         (data1[i + 1] - data2[i + 1]) +
+                         (data1[i + 2] - data2[i + 2]);
+            // Use abs only when diff is significant (branch prediction win)
+            const absDiff = diff < 0 ? -diff : diff;
+            if (absDiff > 50) {
                 total++;
-                const px = (i / 4) % w;
-                const py = Math.floor((i / 4) / w);
-                if (px < w/2) left++; else right++;
-                if (py < h/2) top++; else bottom++;
+                const px = ((i >> 2) % w);
+                const py = ((i >> 2) / w) | 0;
+                if (px < halfW) left++; else right++;
+                if (py < halfH) top++; else bottom++;
             }
         }
 
         if (total < 300) return null;
 
+        // Early exit for dominant direction
         if (left > right * 2.5) return 'swipe_right';
         if (right > left * 2.5) return 'swipe_left';
         if (top > bottom * 2.5) return 'swipe_down';

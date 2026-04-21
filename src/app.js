@@ -1690,7 +1690,7 @@
     function checkGestureMatch(gestureType, landmarks) {
         if (!state.gestureModels.length) return null;
 
-        // Template matching first (precise — uses normalized landmark comparison)
+        // Template matching (precise — uses normalized landmark comparison)
         if (landmarks) {
             const currentFrame = landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 }));
             let bestMatch = null;
@@ -1708,9 +1708,10 @@
             if (bestMatch) return bestMatch;
         }
 
-        // Fallback: simple type matching (fist, open_palm, etc.)
+        // Fallback: simple type matching ONLY for gestures without templates
+        // (template matching is more precise, so it takes priority above)
         for (const g of state.gestureModels) {
-            if (g.simpleType && g.simpleType === gestureType) {
+            if (g.simpleType && g.simpleType === gestureType && (!g.template || !g.template.length)) {
                 return g;
             }
         }
@@ -1779,7 +1780,10 @@
             return;
         }
 
-        // Cancel any existing recording timer
+        // Cancel any existing recording first
+        if (state.gestureRecording) {
+            cancelGestureRecording();
+        }
         if (state._gestureRecordingTimer) {
             clearTimeout(state._gestureRecordingTimer);
         }
@@ -1797,15 +1801,17 @@
 
         // Timeout: save whatever we have after 3 seconds even if < 30 frames
         state._gestureRecordingTimer = setTimeout(() => {
+            // Re-fetch elements in case DOM changed
+            const btn = document.getElementById('gesture-record-start');
+            const status = document.getElementById('gesture-status');
             if (state.gestureRecording && state.gestureSamples.length >= 5) {
                 finishGestureRecording();
             } else if (state.gestureRecording) {
-                // Too few frames — cancel
                 state.gestureRecording = false;
                 state.gestureSamples = [];
-                recordBtn.textContent = 'Start Recording';
-                recordBtn.disabled = false;
-                statusEl.textContent = 'Recording cancelled — not enough frames captured. Try again.';
+                state._gestureRecordingTimer = null;
+                if (btn) { btn.textContent = 'Start Recording'; btn.disabled = false; }
+                if (status) status.textContent = 'Recording cancelled — not enough frames captured. Try again.';
             }
         }, 3000);
     }

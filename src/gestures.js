@@ -140,8 +140,10 @@
                 lastGesture = gesture;
                 lastGestureTime = now;
                 if (onGestureCallback) onGestureCallback(gesture, landmarks);
-                setTimeout(() => { lastGesture = null; }, GESTURE_COOLDOWN);
             }
+        } else if (!gesture) {
+            // Hand disappeared or no gesture recognized — reset so next gesture fires
+            lastGesture = null;
         }
     }
 

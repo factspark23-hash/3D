@@ -632,6 +632,11 @@
         initUploadSection();
         initAIChat();
 
+        // Engine keyboard navigation → part click
+        document.addEventListener('engine:partClick', (e) => {
+            if (e.detail && e.detail.mesh) handlePartClick(e.detail.mesh);
+        });
+
         // Initialize sounds on first user interaction
         document.addEventListener('click', () => {
             JarvisSounds.init();
@@ -855,6 +860,8 @@
                     rebuildExploderModel(state.selectedProject);
                 }
             } else {
+                // Leaving exploder — clean up engine
+                if (window.JarvisExploderEngine) window.JarvisExploderEngine.close();
                 state.selectedProject = null;
                 state.selectedPart = null;
                 showSection('home');
@@ -1002,7 +1009,15 @@
     function showTooltip(e, data) {
         const tooltip = document.getElementById('part-tooltip');
         tooltip.classList.remove('hidden');
-        const ci = data.hasChildren ? ' - ' + data.childCount + ' sub-parts' : '';
+        let ci = data.hasChildren ? ' - ' + data.childCount + ' sub-parts' : '';
+
+        // Engine enhancements
+        if (window.JarvisExploderEngine) {
+            const mesh = exploderHovered;
+            const extras = window.JarvisExploderEngine.onPartHover(mesh);
+            if (extras) ci += extras;
+        }
+
         tooltip.innerHTML = '<strong>' + data.partName + '</strong>' + ci + '<br><span style="color:#888;font-size:11px">' + data.partDesc.slice(0, 80) + '</span>';
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY - 10) + 'px';
@@ -1010,6 +1025,12 @@
     function hideTooltip() { document.getElementById('part-tooltip').classList.add('hidden'); }
 
     function handlePartClick(mesh) {
+        // Let engine intercept (multi-select, measure, annotation)
+        if (window.JarvisExploderEngine) {
+            const result = window.JarvisExploderEngine.onPartClick(mesh);
+            if (result === 'consumed') return;
+        }
+
         const data = mesh.userData;
         logAction('part_click', data.partName);
         JarvisSounds.explode();
@@ -1069,6 +1090,11 @@
         exploderRotation = { x: 0, y: 0 }; exploderRotTarget = { x: 0, y: 0 }; exploderExploded = false; exploderExplodeProgress = 0;
         showPartInfo({ partId: partDef.id, partName: partDef.name, partDesc: partDef.desc || '' });
         renderSidePanel(partId);
+
+        // Re-init engine with new flat parts
+        if (window.JarvisExploderEngine) {
+            window.JarvisExploderEngine.init(exploderFlatParts, exploderScene, exploderRenderer);
+        }
     }
 
     function findPartDef(parts, id) {
@@ -1095,6 +1121,11 @@
         document.getElementById('part-detail-desc').textContent = proj.desc;
         if (exploderAnimId) cancelAnimationFrame(exploderAnimId);
         animateExploder();
+
+        // Init exploder engine
+        if (window.JarvisExploderEngine) {
+            window.JarvisExploderEngine.init(flatParts, exploderScene, exploderRenderer);
+        }
     }
 
     function animateExploder() {
@@ -1212,11 +1243,27 @@
         initExploderRenderer();
         rebuildExploderModel(proj);
         updateBreadcrumbDisplay();
+
+        // Bind engine keyboard shortcuts (once)
+        if (window.JarvisExploderEngine && !window._engineKeysBound) {
+            window.JarvisExploderEngine.bindKeyboard();
+            window._engineKeysBound = true;
+        }
     }
 
     function showPartInfo(data) {
+        // Enrich description with engine data
+        let enrichedDesc = data.partDesc || '';
+        if (window.JarvisExploderEngine) {
+            const mesh = exploderSelected || exploderHovered;
+            if (mesh) {
+                const enriched = window.JarvisExploderEngine.enrichPartDetail(mesh);
+                if (enriched) enrichedDesc = enriched;
+            }
+        }
+
         document.getElementById('part-detail-name').textContent = data.partName;
-        document.getElementById('part-detail-desc').textContent = data.partDesc;
+        document.getElementById('part-detail-desc').textContent = enrichedDesc;
         const detailInfo = document.getElementById('part-detail-info');
         const oldAnn = detailInfo.querySelector('.annotation-wrapper');
         if (oldAnn) oldAnn.remove();

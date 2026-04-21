@@ -162,7 +162,7 @@
                     <div id="gesture-items"></div>
                     <button id="gesture-add" class="btn-secondary">+ Record New Gesture</button>
                     <div id="gesture-record-panel" class="hidden">
-                        <p>Hold a gesture for 2 seconds to record</p>
+                        <p>Hold a gesture steady for ~1 second to record</p>
                         <input type="text" id="gesture-name" placeholder="Gesture name">
                         <select id="gesture-action">
                             <option value="navigate_home">Navigate: Home</option>
@@ -178,7 +178,10 @@
                             <option value="reset_view">3D: Reset View</option>
                             <option value="explode_view">3D: Explode/Assemble</option>
                         </select>
-                        <button id="gesture-record-start" class="btn-primary">Start Recording</button>
+                        <div style="display:flex;gap:8px;margin-top:6px;">
+                            <button id="gesture-record-start" class="btn-primary">Start Recording</button>
+                            <button id="gesture-record-cancel" class="btn-secondary">Cancel</button>
+                        </div>
                     </div>
                 </div>
             </div>

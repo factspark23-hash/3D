@@ -27,6 +27,7 @@
         gestureStream: null,
         gestureRecording: false,
         gestureSamples: [],
+        _gestureRecordingTimer: null,
     };
 
     // ═══════════════════════════════════════════════════════════
@@ -1630,6 +1631,7 @@
             document.getElementById('gesture-record-panel').classList.toggle('hidden');
         });
         document.getElementById('gesture-record-start').addEventListener('click', startGestureRecording);
+        document.getElementById('gesture-record-cancel').addEventListener('click', cancelGestureRecording);
         loadGestures();
     }
 
@@ -1642,13 +1644,12 @@
 
         try {
             await JarvisGestures.init(video, canvas, (gestureType, landmarks) => {
-                // Handle detected gesture
+                // Record frames during recording mode
                 if (state.gestureRecording && landmarks) {
-                    // Note: gesture engine already captures frames in processResults
                     state.gestureSamples.push(landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 })));
                     status.textContent = `Recording... ${state.gestureSamples.length} frames`;
 
-                    if (state.gestureSamples.length >= 60) {
+                    if (state.gestureSamples.length >= 30) {
                         finishGestureRecording();
                     }
                     return;
@@ -1657,7 +1658,7 @@
                 // ── 3D EXPLODER GESTURE CONTROL ──
                 handleExploderGesture(gestureType, landmarks);
 
-                // Check if gesture matches any saved gesture
+                // Match against saved custom gestures
                 const recognized = checkGestureMatch(gestureType, landmarks);
                 if (recognized) {
                     status.textContent = `Detected: ${recognized.name} → ${recognized.action}`;
@@ -1689,15 +1690,8 @@
     function checkGestureMatch(gestureType, landmarks) {
         if (!state.gestureModels.length) return null;
 
-        // First check simple gesture types (fist, open_palm, etc.)
-        for (const g of state.gestureModels) {
-            if (g.simpleType && g.simpleType === gestureType) {
-                return g;
-            }
-        }
-
-        // If we have landmarks, compare against recorded templates
-        if (landmarks && state.gestureModels.some(g => g.template && g.template.length)) {
+        // Template matching first (precise — uses normalized landmark comparison)
+        if (landmarks) {
             const currentFrame = landmarks.map(lm => ({ x: lm.x, y: lm.y, z: lm.z || 0 }));
             let bestMatch = null;
             let bestScore = 0;
@@ -1705,13 +1699,20 @@
             for (const g of state.gestureModels) {
                 if (!g.template || !g.template.length) continue;
                 const score = JarvisGestures.compareTemplates([currentFrame], g.template);
-                if (score > bestScore && score > 0.7) {
+                if (score > bestScore && score > 0.6) {
                     bestScore = score;
                     bestMatch = g;
                 }
             }
 
-            return bestMatch;
+            if (bestMatch) return bestMatch;
+        }
+
+        // Fallback: simple type matching (fist, open_palm, etc.)
+        for (const g of state.gestureModels) {
+            if (g.simpleType && g.simpleType === gestureType) {
+                return g;
+            }
         }
 
         return null;
@@ -1778,33 +1779,85 @@
             return;
         }
 
+        // Cancel any existing recording timer
+        if (state._gestureRecordingTimer) {
+            clearTimeout(state._gestureRecordingTimer);
+        }
+
         state.gestureRecording = true;
         state.gestureSamples = [];
         state._gestureTarget = { name, action };
 
-        JarvisGestures.startRecording();
+        const recordBtn = document.getElementById('gesture-record-start');
+        const statusEl = document.getElementById('gesture-status');
 
-        document.getElementById('gesture-record-start').textContent = 'Recording...';
-        document.getElementById('gesture-record-start').disabled = true;
-        document.getElementById('gesture-status').textContent = 'Hold your gesture for 2 seconds...';
+        recordBtn.textContent = 'Recording...';
+        recordBtn.disabled = true;
+        statusEl.textContent = 'Hold your gesture steady for ~1 second...';
+
+        // Timeout: save whatever we have after 3 seconds even if < 30 frames
+        state._gestureRecordingTimer = setTimeout(() => {
+            if (state.gestureRecording && state.gestureSamples.length >= 5) {
+                finishGestureRecording();
+            } else if (state.gestureRecording) {
+                // Too few frames — cancel
+                state.gestureRecording = false;
+                state.gestureSamples = [];
+                recordBtn.textContent = 'Start Recording';
+                recordBtn.disabled = false;
+                statusEl.textContent = 'Recording cancelled — not enough frames captured. Try again.';
+            }
+        }, 3000);
+    }
+
+    function cancelGestureRecording() {
+        if (!state.gestureRecording) return;
+
+        state.gestureRecording = false;
+        state.gestureSamples = [];
+
+        if (state._gestureRecordingTimer) {
+            clearTimeout(state._gestureRecordingTimer);
+            state._gestureRecordingTimer = null;
+        }
+
+        const recordBtn = document.getElementById('gesture-record-start');
+        const statusEl = document.getElementById('gesture-status');
+        const panel = document.getElementById('gesture-record-panel');
+
+        recordBtn.textContent = 'Start Recording';
+        recordBtn.disabled = false;
+        statusEl.textContent = 'Recording cancelled.';
+        panel.classList.add('hidden');
     }
 
     function finishGestureRecording() {
         state.gestureRecording = false;
+
+        if (state._gestureRecordingTimer) {
+            clearTimeout(state._gestureRecordingTimer);
+            state._gestureRecordingTimer = null;
+        }
+
         const { name, action } = state._gestureTarget;
+        const template = state.gestureSamples;
 
-        // Get the recorded frames from the gesture engine
-        const recordedFrames = JarvisGestures.stopRecording();
+        const recordBtn = document.getElementById('gesture-record-start');
+        const statusEl = document.getElementById('gesture-status');
 
-        // Use the landmarks captured via our state as the template
-        const template = state.gestureSamples.length > 0 ? state.gestureSamples : recordedFrames;
+        if (template.length < 5) {
+            statusEl.textContent = 'Too few frames — try again and hold steady.';
+            recordBtn.textContent = 'Start Recording';
+            recordBtn.disabled = false;
+            state.gestureSamples = [];
+            return;
+        }
 
         // Detect the primary gesture type from the last frame
         let simpleType = null;
         if (template.length > 0) {
             const lastFrame = template[template.length - 1];
             if (lastFrame.length === 21) {
-                // It's full landmark data — determine finger states
                 const lm = lastFrame;
                 const indexExt = lm[8].y < lm[6].y;
                 const middleExt = lm[12].y < lm[10].y;
@@ -1832,9 +1885,9 @@
         renderGestures();
         document.getElementById('gesture-record-panel').classList.add('hidden');
         document.getElementById('gesture-name').value = '';
-        document.getElementById('gesture-record-start').textContent = 'Start Recording';
-        document.getElementById('gesture-record-start').disabled = false;
-        document.getElementById('gesture-status').textContent = `Gesture "${name}" saved! (${template.length} frames captured)`;
+        recordBtn.textContent = 'Start Recording';
+        recordBtn.disabled = false;
+        statusEl.textContent = `Gesture "${name}" saved! (${template.length} frames captured)`;
     }
 
     async function loadGestures() {

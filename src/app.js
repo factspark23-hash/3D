@@ -21,6 +21,7 @@
         projects: [],
         peer: null,
         peerConn: null,
+        peerCall: null,
         roomCode: null,
         roomPassword: null,
         gestureModels: [],
@@ -1540,21 +1541,31 @@
                             addRoomMessage('system', 'Wrong password — connection rejected');
                             setTimeout(() => conn.close(), 500);
                         }
-                    } else if (authenticated && data.type === 'chat') {
-                        addRoomMessage('remote', data.text);
                     }
+                    // Chat handled by setupDataChannel — no duplicate listener
                 });
             });
 
             state.peer.on('call', async call => {
-                // Only answer if we have an authenticated peer
                 if (!state.peerConn) { call.close(); return; }
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                document.getElementById('local-video').srcObject = stream;
-                call.answer(stream);
-                call.on('stream', remoteStream => {
-                    document.getElementById('remote-video').srcObject = remoteStream;
-                });
+                state.peerCall = call;
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    document.getElementById('local-video').srcObject = stream;
+                    call.answer(stream);
+                    call.on('stream', remoteStream => {
+                        document.getElementById('remote-video').srcObject = remoteStream;
+                    });
+                    call.on('close', () => {
+                        addRoomMessage('system', 'Video call ended');
+                    });
+                    call.on('error', (err) => {
+                        addRoomMessage('system', 'Call error: ' + err.message);
+                    });
+                } catch (err) {
+                    addRoomMessage('system', 'Camera/mic not available — chat only');
+                    call.answer(); // answer without stream
+                }
             });
         } catch (err) {
             addRoomMessage('system', 'Error: ' + err.message);
@@ -1586,27 +1597,35 @@
                         authPending = false;
                         showActiveRoom();
                         addRoomMessage('system', `Joined room: ${code}`);
-                        setupDataChannel(conn);
+                        // setupDataChannel adds the chat listener — don't duplicate here
 
                         // Start video call after auth
                         navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
                             document.getElementById('local-video').srcObject = stream;
                             const call = state.peer.call('jarvis-' + code.toLowerCase(), stream);
+                            state.peerCall = call;
                             call.on('stream', remoteStream => {
                                 document.getElementById('remote-video').srcObject = remoteStream;
+                            });
+                            call.on('close', () => {
+                                addRoomMessage('system', 'Video call ended');
+                            });
+                            call.on('error', (err) => {
+                                addRoomMessage('system', 'Call error: ' + err.message);
                             });
                         }).catch(() => {
                             addRoomMessage('system', 'Camera/mic not available — chat only');
                         });
+
+                        setupDataChannel(conn);
                     } else if (data.type === 'auth_fail' && authPending) {
                         authPending = false;
                         addRoomMessage('system', 'Wrong password — connection rejected');
                         setTimeout(() => {
                             leaveRoom();
                         }, 1000);
-                    } else if (data.type === 'chat') {
-                        addRoomMessage('remote', data.text);
                     }
+                    // Chat handled by setupDataChannel — no duplicate listener here
                 });
 
                 conn.on('close', () => {
@@ -1637,17 +1656,41 @@
     }
 
     function leaveRoom() {
-        if (state.peerConn) state.peerConn.close();
-        if (state.peer) state.peer.destroy();
-        state.peer = null; state.peerConn = null; state.roomCode = null;
+        // Close video call
+        if (state.peerCall) {
+            try { state.peerCall.close(); } catch (e) {}
+            state.peerCall = null;
+        }
+        // Close data connection
+        if (state.peerConn) {
+            try { state.peerConn.close(); } catch (e) {}
+        }
+        // Destroy peer
+        if (state.peer) {
+            try { state.peer.destroy(); } catch (e) {}
+        }
+        state.peer = null;
+        state.peerConn = null;
+        state.roomCode = null;
+        state.roomPassword = null;
 
+        // Reset UI
         document.getElementById('room-active').classList.add('hidden');
         document.getElementById('room-lobby').classList.remove('hidden');
         document.getElementById('room-messages').innerHTML = '';
 
+        // Stop local camera/mic
         const localVideo = document.getElementById('local-video');
-        if (localVideo.srcObject) { localVideo.srcObject.getTracks().forEach(t => t.stop()); localVideo.srcObject = null; }
-        document.getElementById('remote-video').srcObject = null;
+        if (localVideo.srcObject) {
+            localVideo.srcObject.getTracks().forEach(t => t.stop());
+            localVideo.srcObject = null;
+        }
+        // Clear remote video
+        const remoteVideo = document.getElementById('remote-video');
+        if (remoteVideo.srcObject) {
+            remoteVideo.srcObject.getTracks().forEach(t => t.stop());
+            remoteVideo.srcObject = null;
+        }
     }
 
     function sendRoomMsg() {

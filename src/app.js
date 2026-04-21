@@ -975,18 +975,7 @@
         const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
         if (exploderHovered && exploderHovered !== exploderSelected) resetMeshHighlight(exploderHovered);
         if (intersects.length > 0) {
-            // Pick the deepest (most nested) part first, not just the outermost surface hit.
-            // This lets users click child parts even when inside an opaque parent.
-            let mesh = intersects[0].object;
-            let maxDepth = mesh.userData.depth || 0;
-            for (let i = 1; i < intersects.length; i++) {
-                const candidate = intersects[i].object;
-                const d = candidate.userData.depth || 0;
-                if (d > maxDepth) {
-                    maxDepth = d;
-                    mesh = candidate;
-                }
-            }
+            let mesh = intersects[0].object; let maxDepth = mesh.userData.depth || 0; for (let i = 1; i < intersects.length; i++) { const candidate = intersects[i].object; const d = candidate.userData.depth || 0; if (d > maxDepth) { maxDepth = d; mesh = candidate; } }
             if (mesh.userData.partId) {
                 exploderHovered = mesh;
                 highlightMesh(mesh, false);
@@ -1050,10 +1039,12 @@
         if (data.hasChildren) {
             exploderBreadcrumb.push({ mesh: mesh, id: data.partId, name: data.partName, desc: data.partDesc });
             drillIntoPartById(data.partId);
+            broadcastSync({ action: 'drill', partId: data.partId, breadcrumb: exploderBreadcrumb });
         } else {
             exploderSelected = mesh;
             highlightMesh(mesh, true);
             showPartInfo(data);
+            broadcastSync({ action: 'part_select', partId: data.partId });
         }
         updateBreadcrumbDisplay();
     }
@@ -1158,6 +1149,16 @@
             exploderRotTarget.y += exploderAutoRotateSpeed;
         }
 
+        // Broadcast transforms periodically if dragging
+        if (exploderDragging && Date.now() % 100 < 20) {
+            broadcastSync({
+                action: 'transform',
+                rotX: exploderRotTarget.x,
+                rotY: exploderRotTarget.y,
+                camPos: exploderCamTarget
+            });
+        }
+
         // Smooth camera position
         exploderCamera.position.lerp(exploderCamTarget, dt * 0.5);
 
@@ -1224,6 +1225,7 @@
 
     function triggerExplodeToggle() {
         exploderExploded = !exploderExploded;
+        broadcastSync({ action: 'explode', exploded: exploderExploded });
         // Reset orig positions for new animation
         if (exploderModel) {
             exploderModel.children.forEach(child => {
@@ -1246,6 +1248,7 @@
 
     function openExploder(proj) {
         state.selectedProject = proj;
+        broadcastSync({ action: 'project_open', projectId: proj.id });
         state.selectedPart = null;
         exploderBreadcrumb = [];
         stopAllCardAnimations();
@@ -1395,18 +1398,7 @@
                 const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
 
                 if (intersects.length > 0) {
-                    // Pick the deepest (most nested) part first, not just the outermost surface hit.
-                    // This lets users click child parts even when inside an opaque parent.
-                    let mesh = intersects[0].object;
-                    let maxDepth = mesh.userData.depth || 0;
-                    for (let i = 1; i < intersects.length; i++) {
-                        const candidate = intersects[i].object;
-                        const d = candidate.userData.depth || 0;
-                        if (d > maxDepth) {
-                            maxDepth = d;
-                            mesh = candidate;
-                        }
-                    }
+                    let mesh = intersects[0].object; let maxDepth = mesh.userData.depth || 0; for (let i = 1; i < intersects.length; i++) { const candidate = intersects[i].object; const d = candidate.userData.depth || 0; if (d > maxDepth) { maxDepth = d; mesh = candidate; } }
                     if (mesh.userData.partId) {
                         // Highlight
                         if (exploderHovered && exploderHovered !== exploderSelected) resetMeshHighlight(exploderHovered);
@@ -1662,12 +1654,67 @@
         }
     }
 
+    function broadcastSync(data) {
+        if (state.peerConn && state.peerConn.open && !state._isApplyingSync) {
+            state.peerConn.send({ type: 'sync', ...data });
+        }
+    }
+
     function setupDataChannel(conn) {
         conn.on('data', data => {
             if (data.type === 'chat') {
                 addRoomMessage('remote', data.text);
+            } else if (data.type === 'sync') {
+                applySync(data);
             }
         });
+    }
+
+    function applySync(data) {
+        state._isApplyingSync = true;
+        try {
+            switch (data.action) {
+                case 'project_open':
+                    const proj = state.projects.find(p => p.id === data.projectId);
+                    if (proj) openExploder(proj);
+                    break;
+                case 'drill':
+                    drillIntoPartById(data.partId);
+                    if (data.breadcrumb) {
+                        exploderBreadcrumb = data.breadcrumb;
+                        updateBreadcrumbDisplay();
+                    }
+                    break;
+                case 'explode':
+                    if (exploderExploded !== data.exploded) {
+                        triggerExplodeToggle();
+                    }
+                    break;
+                case 'part_select':
+                    const mesh = exploderFlatParts.find(m => m.userData.partId === data.partId);
+                    if (mesh) {
+                        if (exploderSelected) resetMeshHighlight(exploderSelected);
+                        exploderSelected = mesh;
+                        highlightMesh(mesh, true);
+                        showPartInfo(mesh.userData);
+                    }
+                    break;
+                case 'transform':
+                    if (exploderRotation) {
+                        exploderRotTarget.x = data.rotX;
+                        exploderRotTarget.y = data.rotY;
+                    }
+                    if (exploderCamera) {
+                        exploderCamTarget.set(data.camPos.x, data.camPos.y, data.camPos.z);
+                    }
+                    break;
+                case 'simulation_state':
+                    setPartSimulationState(data.partId, data.state, true);
+                    break;
+            }
+        } finally {
+            state._isApplyingSync = false;
+        }
     }
 
     function showActiveRoom() {

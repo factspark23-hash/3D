@@ -3,3 +3,5 @@ public/
 .env
 .env.local
 .vercel
+
+supabase/.temp/

@@ -968,7 +968,18 @@
         const intersects = exploderRaycaster.intersectObjects(exploderFlatParts, false);
         if (exploderHovered && exploderHovered !== exploderSelected) resetMeshHighlight(exploderHovered);
         if (intersects.length > 0) {
-            const mesh = intersects[0].object;
+            // Pick the deepest (most nested) part first, not just the outermost surface hit.
+            // This lets users click child parts even when inside an opaque parent.
+            let mesh = intersects[0].object;
+            let maxDepth = mesh.userData.depth || 0;
+            for (let i = 1; i < intersects.length; i++) {
+                const candidate = intersects[i].object;
+                const d = candidate.userData.depth || 0;
+                if (d > maxDepth) {
+                    maxDepth = d;
+                    mesh = candidate;
+                }
+            }
             if (mesh.userData.partId) {
                 exploderHovered = mesh;
                 highlightMesh(mesh, false);

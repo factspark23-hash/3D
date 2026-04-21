@@ -1,4 +1,4 @@
-name: Deploy to Supabase
+name: Deploy
 
 on:
   push:
@@ -6,15 +6,13 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  supabase:
+    name: Supabase Edge Functions
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Deno
-        uses: denoland/setup-deno@v1
+      - uses: denoland/setup-deno@v1
         with:
           deno-version: v1.x
 
@@ -26,19 +24,14 @@ jobs:
       - name: Install Supabase CLI
         run: npm install -g supabase
 
-      - name: Prepare public directory
+      - name: Prepare public/
         run: |
           mkdir -p public
           cp index.html public/
           cp -r src public/
           cp -r models public/
           cp server.js public/
-
-          # Inject deploy-config.js after app.js
           sed -i 's|<script src="src/app.js"></script>|<script src="src/app.js"></script>\n    <script>window.__SUPABASE_FN_URL = "https://${{ secrets.SUPABASE_PROJECT_REF }}.functions.supabase.co";</script>\n    <script src="src/deploy-config.js"></script>|' public/index.html
-
-          echo "Prepared public/:"
-          ls -la public/
 
       - name: Deploy to Supabase
         env:
@@ -48,7 +41,19 @@ jobs:
           supabase link --project-ref $SUPABASE_PROJECT_REF
           supabase functions deploy serve-site --no-verify-jwt
           supabase functions deploy api-proxy --no-verify-jwt
-          echo "✅ Supabase deployed"
 
-      - name: Cleanup
-        run: rm -rf public
+      - run: rm -rf public
+
+  vercel:
+    name: Vercel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod'

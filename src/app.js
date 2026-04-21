@@ -1280,9 +1280,72 @@
         document.getElementById('part-detail-name').textContent = data.partName;
         document.getElementById('part-detail-desc').textContent = enrichedDesc;
         const detailInfo = document.getElementById('part-detail-info');
+
+        // Remove old UI
         const oldAnn = detailInfo.querySelector('.annotation-wrapper');
         if (oldAnn) oldAnn.remove();
+        const oldSim = detailInfo.querySelector('.simulation-controls');
+        if (oldSim) oldSim.remove();
+
+        // Simulation Controls ("What-If" mode)
+        const simDiv = document.createElement('div');
+        simDiv.className = 'simulation-controls';
+        simDiv.style.marginTop = '15px';
+        simDiv.style.display = 'flex';
+        simDiv.style.gap = '10px';
+
+        const stateLabel = document.createElement('span');
+        stateLabel.style.color = '#00d4ff';
+        stateLabel.style.fontSize = '12px';
+        stateLabel.style.fontFamily = 'Orbitron, monospace';
+        stateLabel.textContent = 'SYSTEM STATE: ';
+
+        const stateVal = document.createElement('span');
+        stateVal.id = 'part-sim-status';
+        stateVal.style.color = data.simState === 'error' ? '#ff3232' : '#00ff88';
+        stateVal.textContent = (data.simState || 'NOMINAL').toUpperCase();
+        stateLabel.appendChild(stateVal);
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'exploder-ctrl-btn';
+        toggleBtn.style.padding = '4px 12px';
+        toggleBtn.textContent = 'Toggle Stress Test';
+        toggleBtn.onclick = () => {
+            const newState = data.simState === 'error' ? 'nominal' : 'error';
+            setPartSimulationState(data.partId, newState);
+        };
+
+        simDiv.appendChild(stateLabel);
+        simDiv.appendChild(toggleBtn);
+        detailInfo.appendChild(simDiv);
+
         JarvisSearch.createAnnotationUI(data.partId, detailInfo);
+    }
+
+    function setPartSimulationState(partId, newState, isSync = false) {
+        const mesh = exploderFlatParts.find(m => m.userData.partId === partId);
+        if (!mesh) return;
+
+        mesh.userData.simState = newState;
+        if (newState === 'error') {
+            mesh.material.emissive.setHex(0xff3232);
+            mesh.material.emissiveIntensity = 0.6;
+        } else {
+            mesh.material.emissive.setHex(mesh.userData.originalColor || 0x00d4ff);
+            mesh.material.emissiveIntensity = 0.05;
+        }
+
+        if (exploderSelected?.userData.partId === partId) {
+            const statusEl = document.getElementById('part-sim-status');
+            if (statusEl) {
+                statusEl.textContent = newState.toUpperCase();
+                statusEl.style.color = newState === 'error' ? '#ff3232' : '#00ff88';
+            }
+        }
+
+        if (!isSync) {
+            broadcastSync({ action: 'simulation_state', partId, state: newState });
+        }
     }
 
     function renderSidePanel(focusPartId) {
